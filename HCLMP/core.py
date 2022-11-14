@@ -1,18 +1,21 @@
-import numpy as np
-import torch
-import random
-from tqdm import tqdm
-from HCLMP.HCLMP import HCLMP, compute_loss
-from torch.utils.data import Dataset, DataLoader
-import os
-import json
-from HCLMP.graph_encoder import CompositionData, collate_batch
-
 '''
-Pytorch implementation of the paper "Materials representation and transfer learning for multi-property prediction"
+Pytorch implementation of the paper "Materials representation and transfer
+learning for multi-property prediction"
+
 Author: Shufeng KONG, Cornell University, USA
 Contact: sk2299@cornell.edu
 '''
+
+import textwrap
+
+import numpy as np
+import torch
+from torch.utils.data import Dataset, DataLoader
+from tqdm import tqdm
+
+from HCLMP.HCLMP import HCLMP, compute_loss
+from HCLMP.graph_encoder import CompositionData, collate_batch
+
 
 class MyDataset(Dataset):
     def __init__(self, Data, idx_path):
@@ -69,34 +72,46 @@ def train(args):
     all_target = dataset.get_all_target().to(args.device)
     MyScaler = Scaler()
     MyScaler.fit(all_target)
-    #MyScaler.mean = MyScaler.mean.to(args.device)
-    #MyScaler.std = MyScaler.std.to(args.device)
+    # MyScaler.mean = MyScaler.mean.to(args.device)
+    # MyScaler.std = MyScaler.std.to(args.device)
 
-    #composition_dataset = CompositionData(args.data_path, "data/embeddings/megnet16-embedding.json", "regression")
-    #composition_dataset = CompositionData(args.data_path, "data/embeddings/cgcnn-embedding.json", "regression")
-    composition_dataset = CompositionData(args.data_path, "data/embeddings/matscholar-embedding.json", "regression")
+    # composition_dataset = CompositionData(args.data_path,
+    #                                       "data/embeddings/megnet16-embedding.json",
+    #                                       "regression")
+    # composition_dataset = CompositionData(args.data_path,
+    #                                       "data/embeddings/cgcnn-embedding.json",
+    #                                       "regression")
+    composition_dataset = CompositionData(args.data_path,
+                                          "data/embeddings/matscholar-embedding.json",
+                                          "regression")
     train_idx = np.load(args.train_path)
     val_idx = np.load(args.val_path)
     train_dataset = torch.utils.data.Subset(composition_dataset, train_idx)
     val_dataset = torch.utils.data.Subset(composition_dataset, val_idx)
 
     train_loader = DataLoader(train_dataset,
-                             batch_size=args.batch_size,
-                             shuffle=True,
-                             collate_fn= collate_batch)
+                              batch_size=args.batch_size,
+                              shuffle=True,
+                              collate_fn=collate_batch)
 
     val_loader = DataLoader(val_dataset,
-                             batch_size=args.batch_size,
-                             shuffle=False,
-                             collate_fn= collate_batch)
+                            batch_size=args.batch_size,
+                            shuffle=False,
+                            collate_fn=collate_batch)
 
     elem_emb_len = composition_dataset.elem_emb_len
 
-    model = HCLMP(args.feat_dim, args.label_dim, args.transfer_type, args.gen_feat_dim, elem_emb_len, args.device).to(args.device)
+    model = HCLMP(args.feat_dim, args.label_dim, args.transfer_type,
+                  args.gen_feat_dim, elem_emb_len, args.device).to(args.device)
 
-    optimizer = torch.optim.AdamW(params=model.parameters(), lr=args.lr, weight_decay=1e-2)
+    optimizer = torch.optim.AdamW(params=model.parameters(),
+                                  lr=args.lr,
+                                  weight_decay=1e-2)
     one_epoch_iter = np.ceil(len(train_dataset) / args.batch_size)
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, one_epoch_iter * (args.epochs / args.decay_times), args.decay_ratios)
+    scheduler = torch.optim.lr_scheduler.StepLR(
+        optimizer, one_epoch_iter * (args.epochs / args.decay_times),
+        args.decay_ratios
+    )
 
     best_loss = 1e+10
     for epoch in range(args.epochs):
@@ -110,7 +125,13 @@ def train(args):
         pred_e = []
         pred_x = []
         label = []
-        for input_, y, gen_feat, _, _ in tqdm(train_loader, mininterval=0.5, desc='(Training)', position=0, leave=True, ascii=True):
+        iterator = tqdm(train_loader,
+                        mininterval=0.5,
+                        desc='(Training)',
+                        position=0,
+                        leave=True,
+                        ascii=True)
+        for input_, y, gen_feat, _, _ in iterator:
             input_ = (tensor.to(args.device) for tensor in input_)
             y = y.to(args.device)
             y_norm = MyScaler.scale(y)
@@ -143,11 +164,18 @@ def train(args):
         lr = optimizer.param_groups[0]['lr']
 
         print("\n********** TRAINING STATISTIC ***********")
-        print("epoch =%.1f\t lr =%.6f\t total_loss =%.6f\t nll_loss_e =%.6f\t nll_loss_x =%.6f\t kl_loss =%.6f\t" %
-              (epoch, lr, total_loss_smooth, nll_loss_e_smooth, nll_loss_x_smooth, kl_loss_smooth))
-        #print("mae=%.6f\t mae_x=%.6f\t mae_ori=%.6f\t mae_x_ori=%.6f" % (mae, mae_x, mae_ori, mae_x_ori))
+        msg = textwrap.dedent(
+            f"""
+            epoch = {epoch}\t
+            lr = {lr}\t
+            total loss = {total_loss_smooth}\t
+            nll loss = {nll_loss_e_smooth}\t
+            nll loss x = {nll_loss_x_smooth}\t
+            kl loss = {kl_loss_smooth}\t
+            """
+        )
+        print(msg)
         print("\n*****************************************")
-
 
         # validate
         model.eval()
@@ -159,7 +187,13 @@ def train(args):
         pred_e = []
         pred_x = []
         label = []
-        for input_, y, gen_feat, _, _ in tqdm(val_loader, mininterval=0.5, desc='(Validating)', position=0, leave=True, ascii=True):
+
+        iterator = tqdm(val_loader,
+                        mininterval=0.5,
+                        desc='(Validating)',
+                        position=0, leave=True,
+                        ascii=True)
+        for input_, y, gen_feat, _, _ in iterator:
             input_ = (tensor.to(args.device) for tensor in input_)
             y = y.to(args.device)
             y_norm = MyScaler.scale(y)
@@ -187,8 +221,16 @@ def train(args):
         kl_loss_smooth = kl_loss_smooth / count
 
         print("\n********** VALIDATING STATISTIC ***********")
-        print("epoch =%.1f\t total_loss =%.6f\t nll_loss_e =%.6f\t nll_loss_x =%.6f\t kl_loss =%.6f\t" %
-              (epoch, total_loss_smooth, nll_loss_e_smooth, nll_loss_x_smooth, kl_loss_smooth))
+        msg = textwrap.dedent(
+            f"""
+            epoch = {epoch}\t
+            total loss = {total_loss_smooth}\t
+            nll loss = {nll_loss_e_smooth}\t
+            nll loss x = {nll_loss_x_smooth}\t
+            kl loss = {kl_loss_smooth}\t
+            """
+        )
+        print(msg)
         print("\n*****************************************")
 
         checkpoint = {}
@@ -196,10 +238,12 @@ def train(args):
         checkpoint['scaler_state'] = MyScaler.state_dict()
         checkpoint['args'] = args
         checkpoint['epoch'] = epoch
-        torch.save(checkpoint, args.save_path + 'checkpoint_' + args.transfer_type + '.pth.tar')
+        cp_file = args.save_path + 'checkpoint_' + args.transfer_type + '.pth.tar'
+        torch.save(checkpoint, cp_file)
         if best_loss > nll_loss_x_smooth:
             best_loss = nll_loss_x_smooth
-            torch.save(checkpoint, args.save_path + 'best_' + args.transfer_type + '.pth.tar')
+            best_file = args.save_path + 'best_' + args.transfer_type + '.pth.tar'
+            torch.save(checkpoint, best_file)
 
 
 # load and test models, as well as saving results
@@ -223,7 +267,6 @@ def test(args):
 
 def run_test(args, mode):
     path = args.save_path + mode + '_' + args.transfer_type + '.pth.tar'
-    #print('checkpoint path:', path)
     checkpoint = torch.load(path, map_location=args.device)
     args_save = checkpoint['args']
     args.feat_dim = args_save.feat_dim
@@ -232,22 +275,22 @@ def run_test(args, mode):
 
     MyScaler = Scaler()
     MyScaler.load_state_dict(checkpoint['scaler_state'])
-    Data = torch.load(args.data_path)
 
-    #composition_dataset = CompositionData(args.data_path, "data/embeddings/megnet16-embedding.json", "regression")
-    #composition_dataset = CompositionData(args.data_path, "data/embeddings/cgcnn-embedding.json", "regression")
-    composition_dataset = CompositionData(args.data_path, "data/embeddings/matscholar-embedding.json", "regression")
+    composition_dataset = CompositionData(args.data_path,
+                                          "data/embeddings/matscholar-embedding.json",
+                                          "regression")
     test_idx = np.load(args.test_path)
     test_dataset = torch.utils.data.Subset(composition_dataset, test_idx)
 
     test_loader = DataLoader(test_dataset,
                              batch_size=args.batch_size,
                              shuffle=False,
-                             collate_fn= collate_batch)
+                             collate_fn=collate_batch)
 
     elem_emb_len = composition_dataset.elem_emb_len
 
-    model = HCLMP(args.feat_dim, args.label_dim, args.transfer_type, args.gen_feat_dim, elem_emb_len, args.device).to(args.device)
+    model = HCLMP(args.feat_dim, args.label_dim, args.transfer_type,
+                  args.gen_feat_dim, elem_emb_len, args.device).to(args.device)
     model.load_state_dict(checkpoint['model'])
 
     # test
@@ -261,7 +304,13 @@ def run_test(args, mode):
     pred_x = []
     label = []
 
-    for input_, y, gen_feat, _, _ in tqdm(test_loader, mininterval=0.5, desc='(Testing)', position=0, leave=True, ascii=True):
+    iterator = tqdm(test_loader,
+                    mininterval=0.5,
+                    desc='(Testing)',
+                    position=0,
+                    leave=True,
+                    ascii=True)
+    for input_, y, gen_feat, _, _ in iterator:
         input_ = (tensor.to(args.device) for tensor in input_)
         y = y.to(args.device)
         y_norm = MyScaler.scale(y)
@@ -291,31 +340,9 @@ def run_test(args, mode):
     nll_loss_e = torch.mean(torch.abs(pred_e-label))
     nll_loss_x = torch.mean(torch.abs(pred_x-label))
 
-    #print("\n********** TESTING STATISTIC ***********")
-    #print("epoch =%.1f\t total_loss =%.6f\t nll_loss_e =%.6f\t nll_loss_x =%.6f\t kl_loss =%.6f\t" %
-    #      (checkpoint['epoch'], total_loss_smooth, nll_loss_e, nll_loss_x, kl_loss_smooth))
-    #print("\n*****************************************")
-
-    #result_path = f"results/{args.sys_name}/"
     label = label.data.cpu().numpy()
     pred = pred_x.data.cpu().numpy()
     mean = MyScaler.mean.data.cpu().numpy()
     std = MyScaler.std.data.cpu().numpy()
 
     return label, pred, mean, std, nll_loss_x
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
