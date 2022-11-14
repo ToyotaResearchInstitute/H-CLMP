@@ -1,16 +1,22 @@
-import torch
-import torch.nn as nn
-from torch_scatter import scatter_add, scatter_max, scatter_mean
-from torch.utils.data import Dataset
-import os
-import json
-import numpy as np
 '''
-This encoder takes the element embedding and element fraction as input and produce an latent embedding.
-This piece of codes is taken from Goodall and Lee, Predicting materials properties without crystal structure: 
-deep representation learning from stoichiometry, Nature communication, 2020. Copyright belongs to the authors. 
+This encoder takes the element embedding and element fraction as input and
+produce an latent embedding.  This piece of codes is taken from Goodall and
+Lee, Predicting materials properties without crystal structure: deep
+representation learning from stoichiometry, Nature communication, 2020.
+Copyright belongs to the authors.
+
 Please see the Github Link: https://github.com/CompRhys/roost for details.
 '''
+
+import os
+import json
+
+import numpy as np
+import torch
+import torch.nn as nn
+from torch_scatter import scatter_add, scatter_max
+from torch.utils.data import Dataset
+
 
 class Featuriser(object):
     """
@@ -61,23 +67,22 @@ class CompositionData(Dataset):
     The CompositionData dataset is a wrapper for a dataset data points are
     automatically constructed from composition strings.
     """
-    '''
-    This class has been modified by us to fit our dataset.
-    '''
+    # This class has been modified by us to fit our dataset.
 
     def __init__(self, data_path, fea_path, task):
-        """
-        """
-        assert os.path.exists(data_path), "{} does not exist!".format(data_path)  # composition str and target
+        # composition str and target
+        assert os.path.exists(data_path), "{} does not exist!".format(data_path)
+
         # NOTE make sure to use dense datasets, here do not use the default na
         # as they can clash with "NaN" which is a valid material
-        #self.df = pd.read_csv(data_path, keep_default_na=False, na_values=[])
+        # self.df = pd.read_csv(data_path, keep_default_na=False, na_values=[])
         self.data = torch.load(data_path)
 
-        assert os.path.exists(fea_path), "{} does not exist!".format(fea_path)  # element embedding
+        # element embedding
+        assert os.path.exists(fea_path), "{} does not exist!".format(fea_path)
         self.elem_features = LoadFeaturiser(fea_path)
         self.elem_emb_len = self.elem_features.embedding_size
-        #print(self.elem_emb_len)
+        # print(self.elem_emb_len)
         self.task = task
         self.n_targets = len(self.data[0]['fom'])
         self.gen_feat_dim = len(self.data[0]['gen_dos_fea'])
@@ -90,11 +95,9 @@ class CompositionData(Dataset):
         tar = np.array(tar_list)
         return tar
 
-
     def __len__(self):
         return len(self.data)
 
-    #@functools.lru_cache(maxsize=None)  # Cache loaded structures
     def __getitem__(self, idx):
         """
 
@@ -113,13 +116,14 @@ class CompositionData(Dataset):
         cry_id: torch.Tensor shape (1,)
             input id for the material
         """
-        #cry_id, composition, target = self.df.iloc[idx]
+
+        # cry_id, composition, target = self.df.iloc[idx]
         cry_id = idx
         composition = self.data[idx]['nonzero_element_name']
         target = self.data[idx]['fom']
         gen_feat = self.data[idx]['gen_dos_fea']
 
-        #elements, weights = parse_roost(composition)
+        # elements, weights = parse_roost(composition)
         elements = self.data[idx]['nonzero_element_name']
         weights = self.data[idx]['composition_nonzero']
         if np.sum(weights) > 1.0+1e-5:
@@ -127,7 +131,7 @@ class CompositionData(Dataset):
             print(elements)
         assert np.sum(weights) <= 1.0+1e-5
 
-        #weights = np.atleast_2d(weights).T / np.sum(weights)
+        # weights = np.atleast_2d(weights).T / np.sum(weights)
         assert len(elements) != 1, f"cry-id {cry_id} [{composition}] is a pure system"
         try:
             atom_fea = np.vstack(
@@ -135,11 +139,13 @@ class CompositionData(Dataset):
             )
         except AssertionError:
             raise AssertionError(
-                f"cry-id {cry_id} [{composition}] contains element types not in embedding"
+                f"cry-id {cry_id} [{composition}] contains element types not in "
+                "embedding"
             )
         except ValueError:
             raise ValueError(
-                f"cry-id {cry_id} [{composition}] composition cannot be parsed into elements"
+                f"cry-id {cry_id} [{composition}] composition cannot be parsed "
+                "into elements"
             )
 
         env_idx = list(range(len(elements)))
@@ -148,13 +154,13 @@ class CompositionData(Dataset):
         nbrs = len(elements) - 1
         for i, _ in enumerate(elements):
             self_fea_idx += [i] * nbrs
-            nbr_fea_idx += env_idx[:i] + env_idx[i + 1 :]
+            nbr_fea_idx += env_idx[:i] + env_idx[i + 1:]
 
         # convert all data to tensors
         atom_weights = torch.Tensor(weights).unsqueeze(1)
         atom_fea = torch.Tensor(atom_fea)
-        self_fea_idx = torch.LongTensor(self_fea_idx)#.unsqueeze(1)
-        nbr_fea_idx = torch.LongTensor(nbr_fea_idx)#.unsqueeze(1)
+        self_fea_idx = torch.LongTensor(self_fea_idx)  # .unsqueeze(1)
+        nbr_fea_idx = torch.LongTensor(nbr_fea_idx)  # .unsqueeze(1)
         if self.task == "regression":
             targets = torch.Tensor([target]).squeeze()
             gen_feats = torch.Tensor([gen_feat]).squeeze()
@@ -168,6 +174,7 @@ class CompositionData(Dataset):
             composition,
             cry_id,
         )
+
 
 def collate_batch(dataset_list):
     """
@@ -205,6 +212,7 @@ def collate_batch(dataset_list):
     batch_comps: list
     batch_ids: list
     """
+
     # define the lists
     batch_atom_weights = []
     batch_atom_fea = []
@@ -284,10 +292,10 @@ class SimpleNetwork(nn.Module):
 
         if batchnorm:
             self.bns = nn.ModuleList([nn.BatchNorm1d(dims[i+1])
-                                    for i in range(len(dims)-1)])
+                                     for i in range(len(dims)-1)])
         else:
             self.bns = nn.ModuleList([nn.Identity()
-                                    for i in range(len(dims)-1)])
+                                     for i in range(len(dims)-1)])
 
         self.acts = nn.ModuleList([activation() for _ in range(len(dims) - 1)])
 
@@ -325,7 +333,7 @@ class WeightedAttentionPooling(nn.Module):
         gate = self.gate_nn(x)
         gate = gate - scatter_max(gate, index, dim=0)[0][index]
 
-        if self.pow >0:
+        if self.pow > 0:
             gate = (weights ** self.pow) * gate.exp()
         else:
             gate = (1/(weights ** torch.abs(self.pow)+1e-10)) * gate.exp()
@@ -431,14 +439,10 @@ class DescriptorNetwork(nn.Module):
         elem_fea = self.embedding(elem_fea)
 
         # add weights as a node feature
-        #print(elem_fea.shape, elem_weights.shape)
         elem_fea = torch.cat([elem_fea, elem_weights], dim=1)
-        #print(torch.sum(elem_fea))
-        #print(torch.sum(elem_fea), torch.sum(elem_weights))
         # apply the message passing functions
         for graph_func in self.graphs:
             elem_fea = graph_func(elem_weights, elem_fea, self_fea_idx, nbr_fea_idx)
-            #print(torch.sum(elem_fea), torch.sum(elem_weights))
 
         # generate crystal features by pooling the elemental features
         head_fea = []
