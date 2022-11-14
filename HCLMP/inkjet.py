@@ -29,7 +29,7 @@ COMP_ARR_COL = 'comp_arr'
 PLATE_ID_COL = 'plate_id'
 SAMPLE_NUM_COL = 'sample_no'
 ENERGIES_COL = 'energies'
-TRANS_COL = 'transmittances'
+TRANS_COL = 'cumulative_transmittances'
 
 
 def parse_vector(vec: str) -> np.ndarray:
@@ -79,13 +79,13 @@ def get_plate_data(data_file: str,
     return df
 
 
-def parse_inkjet_data(data_file: str,
+def parse_inkjet_data(plates_data: dict,
                       n_bins: int = 20) -> pd.DataFrame:
     """
     Read and parse a file containing UV-VIS data from the given data file
 
     Args:
-        data_file (str): The file containing all of the data for the plates
+        plates_data (dict): The raw dictionary containing plate data
 
         n_bins (int): We will discretize the UV-VIS spectra into bins. Use this
         argument to define the number of bins.
@@ -93,9 +93,6 @@ def parse_inkjet_data(data_file: str,
     Returns:
         pd.DataFrame: The post-processed data
     """
-
-    with open(data_file, 'rb') as pkl:
-        plates_data = pickle.load(pkl)
 
     elements = get_elements(plates_data=plates_data)
 
@@ -105,7 +102,7 @@ def parse_inkjet_data(data_file: str,
 
     for plate_id, plate_data in tqdm(plates_data.items(), desc='Plates'):
         sample_iterator = tqdm(enumerate(plate_data[SAMPLE_NUM_COL]),
-                               desc=f'Plate {plate_id}',
+                               desc=f'Discretizing plate {plate_id}',
                                total=len(plate_data[SAMPLE_NUM_COL]))
         for sample_idx, sample_num in sample_iterator:
 
