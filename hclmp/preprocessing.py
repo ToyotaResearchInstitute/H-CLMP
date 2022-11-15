@@ -77,6 +77,10 @@ def preprocess(data_file: str,
         nonzero_idx = np.nonzero(ele_comp)
         assert np.abs(1 - np.sum(ele_comp[nonzero_idx])) < 1e-5
 
+        # Skip any monometallic samples, which cannot be modeled by H-CMLP
+        if len(nonzero_idx) == 1:
+            continue
+
         # Store all the relevant data
         data_dict[idx] = {}
         data_dict[idx]['fom'] = fom
@@ -85,6 +89,7 @@ def preprocess(data_file: str,
         data_dict[idx]['composition_nonzero_idx'] = nonzero_idx
         data_dict[idx]['nonzero_element_name'] = ele_names[nonzero_idx]
         data_dict[idx]['composition'] = ele_comp / np.sum(ele_comp)
+        data_dict[idx]['gen_dos_fea'] = None
 
     # Load the cached generative model for transfer learning
     if transfer:
