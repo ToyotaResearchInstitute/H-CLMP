@@ -17,7 +17,32 @@ from HCLMP.HCLMP import HCLMP, compute_loss
 from HCLMP.graph_encoder import CompositionData, collate_batch
 
 
+class HCLMPDataset(Dataset):
+    """
+    H-CLMP originally accepted the `MyDataset` class, which assumes that you
+    have a file containing the indices of the dataset you want. This class
+    assumes that you will not use indices, and instead take the entire dataset.
+    """
+
+    def __init__(self, Data):
+        self.data = Data
+
+    def get_all_target(self):
+        targets = [np.expand_dims(self.data[idx]['fom'], axis=0)
+                   for idx in range(len(self.data) - 1)]
+        targets_np = np.concatenate(targets, axis=0)
+        return torch.as_tensor(targets_np)
+
+    def __getitem__(self, idx):
+        item = self.data[idx]
+        y = item['fom']
+        ele_comp = item['composition']
+        gen_feat = item['gen_dos_fea']
+        return (torch.as_tensor(ele_comp), torch.as_tensor(y), torch.as_tensor(gen_feat))
+
+
 class MyDataset(Dataset):
+
     def __init__(self, Data, idx_path):
         self.data = Data
         self.idx = np.load(idx_path)
