@@ -7,9 +7,9 @@ then converted into an API by Toyota Research Institute.
 
 import os
 import pickle
+from pathlib import Path
 
 import numpy as np
-# import pandas as pd
 import torch
 from torch import nn
 from torch.autograd import Variable
@@ -20,14 +20,15 @@ import HCLMP.inkjet
 DEFAULT_ELEMENTS = {'Ag', 'Bi', 'Ca', 'Ce', 'Co', 'Cr', 'Cu', 'Er', 'Eu', 'Fe',
                     'Gd', 'In', 'La', 'Mg', 'Mn', 'Mo', 'Nb', 'Nd', 'Ni', 'P',
                     'Pr', 'Rb', 'Sc', 'Sm', 'Ti', 'V', 'W', 'Yb', 'Zn', 'Zr'}
-GENERATOR_STATE_DICT = os.path.join(__file__, 'embeddings',
+GENERATOR_STATE_DICT = os.path.join(Path(__file__).parent.absolute(), 'embeddings',
                                     'generator_MP2020.pt')
 
 
 def preprocess(data_file: str,
                elements: set = DEFAULT_ELEMENTS,
                n_bins: int = 20,
-               latent_dim: int = 50) -> dict:
+               latent_dim: int = 50,
+               transfer: bool = False) -> dict:
     """
     Get all of the elements that are present in the given data file
 
@@ -42,6 +43,9 @@ def preprocess(data_file: str,
 
         latent_dim (int): The number of dimensions for us to have it latent
         space
+
+        transfer (bool): Whether to attempt to transfer generated features from
+        WGAN.
 
     Returns:
         dict: The data in a dictionary format accepted by the H-CLMP model
@@ -60,26 +64,11 @@ def preprocess(data_file: str,
     spectra = df[HCLMP.inkjet.TRANS_COL].to_list()
     foms = np.concatenate(spectra, axis=0).astype(np.float32)
 
-    # Load the cached generative model for transfer learning
-    generator = Generator(label_dim=n_bins,
-                          feature_dim=len(elements),
-                          latent_dim=latent_dim)
-    generator.load_state_dict(torch.load(GENERATOR_STATE_DICT,
-                                         map_location=torch.device('cpu')))
-    generator.eval()
-
     data_dict = {}
     data_dict['all_element_name'] = ele_names
 
     # Create (and validate) the generated features
-    iterator = tqdm(enumerate(zip(element_comps, foms)),
-                    desc='Generating features',
-                    total=len(df))
-    for idx, (ele_comp, fom) in iterator:
-        gen_feat = sample_generator(
-            generator,
-            1,
-            torch.from_numpy(ele_comp).unsqueeze(0)).detach().squeeze().numpy()
+    for idx, (ele_comp, fom) in enumerate(zip(element_comps, foms)):
 
         assert np.abs(1 - np.sum(ele_comp)) < 1e-5
         nonzero_idx = np.nonzero(ele_comp)
@@ -92,8 +81,27 @@ def preprocess(data_file: str,
             ele_comp[nonzero_idx] / np.sum(ele_comp[nonzero_idx])
         data_dict[idx]['composition_nonzero_idx'] = nonzero_idx
         data_dict[idx]['nonzero_element_name'] = ele_names[nonzero_idx]
-        data_dict[idx]['gen_dos_fea'] = gen_feat
         data_dict[idx]['composition'] = ele_comp / np.sum(ele_comp)
+
+    # Load the cached generative model for transfer learning
+    if transfer:
+        generator = Generator(label_dim=n_bins,
+                              feature_dim=len(elements),
+                              latent_dim=latent_dim)
+        generator.load_state_dict(torch.load(GENERATOR_STATE_DICT,
+                                             map_location=torch.device('cpu')))
+        generator.eval()
+
+        # Sample from the generative model to create transferred features
+        iterator = tqdm(enumerate(element_comps),
+                        desc='Transferring generated features',
+                        total=len(df))
+        for idx, ele_comp in iterator:
+            gen_feat = sample_generator(
+                generator,
+                1,
+                torch.from_numpy(ele_comp).unsqueeze(0)).detach().squeeze().numpy()
+            data_dict[idx]['gen_dos_fea'] = gen_feat
 
     return data_dict
 
