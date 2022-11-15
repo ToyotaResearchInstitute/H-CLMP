@@ -13,11 +13,11 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 
-from HCLMP.HCLMP import HCLMP, compute_loss
-from HCLMP.graph_encoder import CompositionData, collate_batch
+from hclmp.model import Hclmp, compute_loss
+from hclmp.graph_encoder import CompositionData, collate_batch
 
 
-class HCLMPDataset(Dataset):
+class HclmpDataset(Dataset):
     """
     H-CLMP originally accepted the `MyDataset` class, which assumes that you
     have a file containing the indices of the dataset you want. This class
@@ -126,7 +126,7 @@ def train(args):
 
     elem_emb_len = composition_dataset.elem_emb_len
 
-    model = HCLMP(args.feat_dim, args.label_dim, args.transfer_type,
+    model = Hclmp(args.feat_dim, args.label_dim, args.transfer_type,
                   args.gen_feat_dim, elem_emb_len, args.device).to(args.device)
 
     optimizer = torch.optim.AdamW(params=model.parameters(),
@@ -314,7 +314,7 @@ def run_test(args, mode):
 
     elem_emb_len = composition_dataset.elem_emb_len
 
-    model = HCLMP(args.feat_dim, args.label_dim, args.transfer_type,
+    model = Hclmp(args.feat_dim, args.label_dim, args.transfer_type,
                   args.gen_feat_dim, elem_emb_len, args.device).to(args.device)
     model.load_state_dict(checkpoint['model'])
 

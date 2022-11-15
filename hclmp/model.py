@@ -10,17 +10,17 @@ import numpy as np
 import torch
 from torch.nn import functional
 
-from HCLMP.graph_encoder import DescriptorNetwork
+from hclmp.graph_encoder import DescriptorNetwork
 
 
 kldivloss = torch.nn.KLDivLoss(reduction='batchmean')
 
 
-class HCLMP(torch.nn.Module):
+class Hclmp(torch.nn.Module):
     def __init__(self, input_dim, label_dim, transfer_type, gen_feat_dim,
                  elem_emb_len, device):
 
-        super(HCLMP, self).__init__()
+        super().__init__()
         input_dim = 64
         self.latent_dim = 128
         self.emb_size = 512

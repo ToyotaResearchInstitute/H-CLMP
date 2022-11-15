@@ -15,7 +15,7 @@ from torch import nn
 from torch.autograd import Variable
 from tqdm import tqdm
 
-import HCLMP.inkjet
+import hclmp.inkjet
 
 DEFAULT_ELEMENTS = {'Ag', 'Bi', 'Ca', 'Ce', 'Co', 'Cr', 'Cu', 'Er', 'Eu', 'Fe',
                     'Gd', 'In', 'La', 'Mg', 'Mn', 'Mo', 'Nb', 'Nd', 'Ni', 'P',
@@ -55,7 +55,7 @@ def preprocess(data_file: str,
     with open(data_file, 'rb') as pkl:
         plates_data = pickle.load(pkl)
 
-    df = HCLMP.inkjet.parse_inkjet_data(plates_data=plates_data,
+    df = hclmp.inkjet.parse_inkjet_data(plates_data=plates_data,
                                         n_bins=n_bins)
 
     # Read the features and labels
@@ -64,7 +64,7 @@ def preprocess(data_file: str,
     # Note:  Here we assume that the spectra are contained as tuples inside DF
     # columns (as opposed to separate columns altogether, which is what
     # conventional H-CLMP does)
-    spectra = [list(spectrum) for spectrum in df[HCLMP.inkjet.TRANS_COL]]
+    spectra = [list(spectrum) for spectrum in df[hclmp.inkjet.TRANS_COL]]
     foms = np.array(spectra)
 
     data_dict = {}
