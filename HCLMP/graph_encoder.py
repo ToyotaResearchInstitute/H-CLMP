@@ -82,10 +82,11 @@ class CompositionData(Dataset):
         assert os.path.exists(fea_path), "{} does not exist!".format(fea_path)
         self.elem_features = LoadFeaturiser(fea_path)
         self.elem_emb_len = self.elem_features.embedding_size
-        # print(self.elem_emb_len)
         self.task = task
         self.n_targets = len(self.data[0]['fom'])
-        self.gen_feat_dim = len(self.data[0]['gen_dos_fea'])
+
+        if 'gen_dos_fea' in self.data[0]:
+            self.gen_feat_dim = len(self.data[0]['gen_dos_fea'])
 
     def get_target(self, index):
         tar_list = []
