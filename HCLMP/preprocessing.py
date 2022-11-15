@@ -61,8 +61,11 @@ def preprocess(data_file: str,
     # Read the features and labels
     ele_names = np.array(sorted(elements))
     element_comps = df[ele_names].to_numpy().astype(np.float32)
-    spectra = df[HCLMP.inkjet.TRANS_COL].to_list()
-    foms = np.concatenate(spectra, axis=0).astype(np.float32)
+    # Note:  Here we assume that the spectra are contained as tuples inside DF
+    # columns (as opposed to separate columns altogether, which is what
+    # conventional H-CLMP does)
+    spectra = [list(spectrum) for spectrum in df[HCLMP.inkjet.TRANS_COL]]
+    foms = np.array(spectra)
 
     data_dict = {}
     data_dict['all_element_name'] = ele_names
