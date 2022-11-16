@@ -70,15 +70,18 @@ def preprocess(data_file: str,
     data_dict = {}
     data_dict['all_element_name'] = ele_names
 
-    # Create (and validate) the generated features
-    for idx, (ele_comp, fom) in enumerate(zip(element_comps, foms)):
+    # Create (and validate) the generated features. Note that we do manual
+    # indexing because we sometimes skip points, and we don't want to increment
+    # the index when this happens. Empty data indices are issues for pytorch.
+    idx = 0
+    for ele_comp, fom in zip(element_comps, foms):
 
         assert np.abs(1 - np.sum(ele_comp)) < 1e-5
         nonzero_idx = np.nonzero(ele_comp)
         assert np.abs(1 - np.sum(ele_comp[nonzero_idx])) < 1e-5
 
         # Skip any monometallic samples, which cannot be modeled by H-CMLP
-        if len(nonzero_idx) == 1:
+        if len(nonzero_idx[0]) == 1:
             continue
 
         # Store all the relevant data
@@ -89,7 +92,8 @@ def preprocess(data_file: str,
         data_dict[idx]['composition_nonzero_idx'] = nonzero_idx
         data_dict[idx]['nonzero_element_name'] = ele_names[nonzero_idx]
         data_dict[idx]['composition'] = ele_comp / np.sum(ele_comp)
-        data_dict[idx]['gen_dos_fea'] = None
+        data_dict[idx]['gen_dos_fea'] = torch.nan
+        idx += 1
 
     # Load the cached generative model for transfer learning
     if transfer:

@@ -25,11 +25,13 @@ class HclmpDataset(Dataset):
     """
 
     def __init__(self, Data):
+        self.all_element_name = Data.pop('all_element_name')
         self.data = Data
 
     def get_all_target(self):
+        indices = sorted(self.data.keys())
         targets = [np.expand_dims(self.data[idx]['fom'], axis=0)
-                   for idx in range(len(self.data) - 1)]
+                   for idx in indices]
         targets_np = np.concatenate(targets, axis=0)
         return torch.as_tensor(targets_np)
 

@@ -75,8 +75,8 @@ class CompositionData(Dataset):
 
         # NOTE make sure to use dense datasets, here do not use the default na
         # as they can clash with "NaN" which is a valid material
-        # self.df = pd.read_csv(data_path, keep_default_na=False, na_values=[])
         self.data = torch.load(data_path)
+        self.all_element_name = self.data.pop('all_element_name')
 
         # element embedding
         assert os.path.exists(fea_path), "{} does not exist!".format(fea_path)
@@ -84,9 +84,14 @@ class CompositionData(Dataset):
         self.elem_emb_len = self.elem_features.embedding_size
         self.task = task
         self.n_targets = len(self.data[0]['fom'])
-
-        if 'gen_dos_fea' in self.data[0]:
+        try:
             self.gen_feat_dim = len(self.data[0]['gen_dos_fea'])
+
+        # `if gen_dos_fea is torch.nan`, we get a type error. But if it's nan,
+        # Then there are no generated features.  In this case, we can assume a
+        # dimensionality of zero.
+        except TypeError:
+            self.gen_feat_dim = 0
 
     def get_target(self, index):
         tar_list = []
