@@ -9,7 +9,10 @@ Contact: sk2299@cornell.edu
 import textwrap
 
 import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
 import torch
+import torch.optim
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 
@@ -89,6 +92,141 @@ class Scaler():
     def load_state_dict(self, state_dict):
         self.mean = state_dict['mean']
         self.std = state_dict['std']
+
+
+def train_new(model: Hclmp,
+              dataset: HclmpDataset,
+              data_loader: DataLoader,
+              optimizer: torch.optim.Optimizer,
+              scheduler: torch.optim.lr_scheduler._LRScheduler = None,
+              scaler: Scaler = None,
+              num_epochs: int = 100,
+              cp_name: str = 'hclmp_chkpt.pth.tar',
+              best_cp_name: str = 'hclmp_chkpt_best.pth.tar',
+              device: torch.device = None):
+    """
+    Updated version of the `train` function. Change notes:
+        - No validation results are reported during training. This is done to
+        reduce information leakage from the validation set.
+        - Update logging. This includes dynamically changing loss figures when
+        operating in Jupyter notebooks.
+        - Added arguments
+
+    Args:
+        model (Hclmp): The H-CLMP model instance to train
+
+        dataset (HclmpDataset): The H-CLMP dataset to train on
+
+        data_loader (DataLoader): The data loader to use to read minibatches
+        during training
+
+        optimizer (torch.optim.Optimizer): Optimizer to use when tuning the
+        weights and biases of the network
+
+        scheduler (torch.optim.lr_scheduler._LRScheduler): The learning rate
+        scheduler to use to taper the learning rate throughout training
+
+        scaler (Scaler): The scaler object used to normalize the output values
+
+        num_epochs (int): The number of epochs to use when training
+
+        cp_name (str): The name of the checkpoint file to save after each epoch
+
+        best_cp_name (str): The name of the checkpoint file to save for the
+        best iteration
+
+        device (torch.device): The torch device to use to train (e.g., GPU or
+        CPU)
+    """
+
+    # Auto-detection of the device to use (if necessary)
+    if device is None:
+        cuda_available = bool(torch.cuda.device_count())
+        device = torch.device('cuda') if cuda_available else torch.device('cpu')
+
+    # If we're in a notebook, we'll use a dynamic plot of the loss.
+    # But if we're in a normal python thread, then we'll just use tqdm and
+    # print statements.
+    notebook = is_notebook()
+    if notebook:
+        fig = plt.figure()
+        ax = fig.subplots(1, 1)
+        from IPython.display import display, clear_output
+        from tqdm.notebook import tqdm as tqdm_
+    else:
+        tqdm_ = tqdm
+
+    # Initialize training
+    model.train()
+    n_data = len(dataset)
+    losses = {'total': [], 'nll': [], 'nll x': [], 'kl': []}
+    best_loss = np.inf
+    minibatches = []
+
+    epoch_iter = tqdm_(range(num_epochs), total=num_epochs, desc='Epochs', leave=False)
+    for epoch in epoch_iter:
+
+        # Divide training of each epoch into batches
+        minibatch_iter = tqdm_(data_loader, desc='Minibatch', leave=False)
+        for input_, y, gen_feat, _, _ in minibatch_iter:
+
+            input_ = (tensor.to(device) for tensor in input_)
+            y = y.to(device)
+            y = scaler.scale(y).float() if scaler else y.float()
+            gen_feat = gen_feat.to(device).float()
+
+            out = model(y, gen_feat, *input_)
+            total_loss, nll_loss_e, nll_loss_x, kl_loss = compute_loss(y, out)
+
+            # Train on this one batch
+            optimizer.zero_grad()
+            total_loss.backward()
+            optimizer.step()
+            if scheduler:
+                scheduler.step()
+
+            losses['total'].append(float(total_loss))
+            losses['nll'].append(float(nll_loss_e))
+            losses['nll x'].append(float(nll_loss_x))
+            losses['kl'].append(float(kl_loss))
+            minibatches.append(len(losses['total']))
+
+            # Display the loss via tqdm
+            if not notebook:
+                loss_summary = {loss_name: np.average(loss[-n_data:])
+                                for loss_name, loss in losses.items()}
+                minibatch_iter.set_postfix(loss_summary)
+
+            # Display the loss via dynamically updating plot
+            else:
+                ax.clear()
+                ax.set_xlim([0, num_epochs * len(data_loader)])
+                min_loss = float(min([0] + [min(loss) for loss in losses.values()]))
+                max_loss = float(max(max(loss) for loss in losses.values()))
+                ax.set_ylim([min_loss, max_loss])
+                ax.set_xlabel('Minibatch #')
+                ax.set_ylabel('Loss')
+                for loss_name, loss in losses.items():
+                    sns.lineplot(x=minibatches, y=loss, ax=ax, label=loss_name)
+                display(fig)
+                clear_output(wait=True)
+
+        # Update the displayed learning rate
+        lr = optimizer.param_groups[0]['lr']
+        epoch_iter.set_postfix(lr=lr)
+
+        # Save the checkpoint
+        checkpoint = {'model': model.state_dict(),
+                      'epoch': epoch}
+        if scaler:
+            checkpoint['scaler_state'] = scaler.state_dict()
+        torch.save(checkpoint, cp_name)
+
+        # Save the best model
+        mean_loss = np.average(losses['nll x'][-n_data:])
+        if best_loss > mean_loss:
+            best_loss = mean_loss
+            torch.save(checkpoint, best_cp_name)
 
 
 # train and save models
@@ -373,3 +511,32 @@ def run_test(args, mode):
     std = MyScaler.std.data.cpu().numpy()
 
     return label, pred, mean, std, nll_loss_x
+
+
+def is_notebook() -> bool:
+    """
+    Detects whether this Python instance is in a notebook
+
+    :return bool: Whether this python instance is in a notebook
+    """
+    # Credict goes to Gustavo Bezerra
+    # https://stackoverflow.com/questions/15411967/how-can-i-check-if-code-is-executed-in-the-ipython-notebook
+
+    try:
+        shell = get_ipython().__class__.__name__
+
+        # Jupyter notebook or qtconsole
+        if shell == 'ZMQInteractiveShell':
+            return True
+
+        # Terminal running IPython
+        elif shell == 'TerminalInteractiveShell':
+            return False
+
+        # Other type (?)
+        else:
+            return False
+
+    # Probably standard Python interpreter
+    except NameError:
+        return False
