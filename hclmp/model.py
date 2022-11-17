@@ -154,6 +154,7 @@ class Hclmp(torch.nn.Module):
         # We use the graph attention neural network from the Roost model to
         # encoder element composition features.  Please refer to the work of
         # Goodall and Lee, natural communication, 2020.
+
         feat = self.graph_encoder(
             elem_weights, elem_fea, self_fea_idx, nbr_fea_idx, cry_elem_idx
         )  # (bs, 64)
@@ -215,6 +216,66 @@ class Hclmp(torch.nn.Module):
         output['label_out'] = label_out
         output['feat_out'] = feat_out
         return output
+
+    def predict(self, inputs: tuple, gen_feat=None):
+        """
+        Use input features to make a prediction on the output. Note that the
+        `forward` method would normally be used to do this, but we use the
+        `forward` method during training (not prediction). And during training,
+        we use labels to train the encoder. This method skips encoder training
+        and does not need labels.
+
+        Args:
+            inputs (tuple): Tuple of tensors for the inputs
+
+            gen_feat (tuple): Tuple of generated features from the GAN. Unused
+            if the `self.transfer_type` is not `'gen_feat'`.
+
+        Returns:
+            torch.tensor: The output predictions
+        """
+
+        feat = self.graph_encoder(*inputs)  # (bs, 64)
+
+        if self.transfer_type == 'gen_feat':
+            gen_feat = self.gen_feat_map(gen_feat)
+            feat = torch.cat((feat, gen_feat), dim=1)
+
+        fx_output = self.feat_forward(feat)
+        feat_emb = fx_output['feat_emb']  # [bs, emb_size]
+        embs = self.fe0.weight  # [emb_size, label_dim]
+
+        if not self.label_correlation:
+            # [bs, emb_size] * [emb_size, label_dim] = [bs, label_dim]
+            feat_out = torch.matmul(feat_emb, embs)  # [bs, label_dim]
+        else:
+            # [bs, emb_size] * [emb_size, label_dim] = [bs, label_dim]
+            feat_out0 = torch.matmul(feat_emb, embs)  # [bs, label_dim]
+
+            # generate label embedding from label multivariate Gaussian,
+            # perform global label correlation learning
+            noise = torch.normal(
+                0, 1,
+                size=(embs.shape[0], feat_out0.shape[0], int(feat_out0.shape[1]))
+            ).to(self.device)  # [emb_size, bs, label_dim]
+
+            # [label_dim, label_dim]
+            B = self.r_sqrt_sigma.T.float().to(self.device)
+            # [emb_size, bs, label_dim]
+            feat_emb = torch.tensordot(noise, B, dims=1) + feat_out0
+            # [emb_size, bs, label_dim]
+            feat_emb = functional.normalize(feat_emb, dim=0)
+            # [bs, label_dim, emb_size]
+            feat_out = feat_emb.permute(1, 2, 0)
+
+            # run label attention graph, perform conditional higher-order label
+            # correlation learning
+            feat_out = feat_out.transpose(0, 1)  # [label_dim, bs, emb_size]
+            feat_out = self.transformer_encoder(feat_out)
+            feat_out = feat_out.transpose(0, 1)  # [bs, label_dim, emb_size]
+            feat_out = self.out_after_atten_x(feat_out).squeeze()*0.5 + feat_out0
+
+        return feat_out
 
 
 def compute_loss(input_label, output):
