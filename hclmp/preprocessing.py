@@ -64,6 +64,7 @@ def preprocess(data_file: str,
     # Note:  Here we assume that the spectra are contained as tuples inside DF
     # columns (as opposed to separate columns altogether, which is what
     # conventional H-CLMP does)
+    energies = np.array([list(nrgs) for nrgs in df[hclmp.inkjet.ENERGIES_COL]])
     spectra = [list(spectrum) for spectrum in df[hclmp.inkjet.TRANS_COL]]
     foms = np.array(spectra)
 
@@ -74,7 +75,7 @@ def preprocess(data_file: str,
     # indexing because we sometimes skip points, and we don't want to increment
     # the index when this happens. Empty data indices are issues for pytorch.
     idx = 0
-    for ele_comp, fom in zip(element_comps, foms):
+    for ele_comp, fom, nrgs in zip(element_comps, foms, energies):
 
         assert np.abs(1 - np.sum(ele_comp)) < 1e-5
         nonzero_idx = np.nonzero(ele_comp)
@@ -86,6 +87,7 @@ def preprocess(data_file: str,
 
         # Store all the relevant data
         data_dict[idx] = {}
+        data_dict[idx]['energies'] = nrgs
         data_dict[idx]['fom'] = fom
         data_dict[idx]['composition_nonzero'] = \
             ele_comp[nonzero_idx] / np.sum(ele_comp[nonzero_idx])
