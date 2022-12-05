@@ -15,7 +15,7 @@ from typing import Generator, Optional
 
 import numpy as np
 import pandas as pd
-from scipy import constants, integrate
+from scipy import constants
 from tqdm.auto import tqdm
 
 
@@ -112,7 +112,7 @@ def parse_inkjet_data(plates_data: dict,
                 comp = plate_data[COMP_ARR_COL][sample_idx, ele_idx]
                 compositions[element] = float(comp)
 
-            # Get the cumulative transmittance
+            # Get the transmittance
             transmittance_generator = get_aggregated_spectrum(
                 plate_data=plate_data, sample_num=sample_num, n_bins=n_bins)
             try:
@@ -187,21 +187,18 @@ def get_aggregated_spectrum(plate_data: dict,
 
     Yields:
         tuple(float, float): a tuple whose first element is the average energy
-        of a bin and whose second element is the cumulative transmittance in that
-        bin
+        of a bin and whose second element is the transmittance in that bin
     """
 
-    for wls, abss in discretize_spectrum(plate_data=plate_data,
-                                         sample_num=sample_num,
-                                         n_bins=n_bins):
+    for wls, trans in discretize_spectrum(plate_data=plate_data,
+                                          sample_num=sample_num,
+                                          n_bins=n_bins):
 
         # Convert wavelength unis to energies. Since they're inverted,
         # we reverse the order of both the energies and the transmittances
         energies = list(reversed([wavelength_to_energy(wl) for wl in wls]))
-        trans_rev = list(reversed(abss))
-
-        transmittances = integrate.cumulative_trapezoid(x=energies, y=trans_rev)
-        yield np.average(energies), sum(transmittances)
+        transmittances = list(reversed(trans))
+        yield np.average(energies), np.average(transmittances)
 
 
 def discretize_spectrum(plate_data: dict,
@@ -247,8 +244,8 @@ def discretize_spectrum(plate_data: dict,
     spectrum = list(zip(wavelengths, trans_clipped))
     for chunk in np.array_split(spectrum, indices_or_sections=n_bins):
         wls = chunk[:, 0]
-        abss = chunk[:, 1]
-        yield wls, abss
+        trans = chunk[:, 1]
+        yield wls, trans
 
 
 def wavelength_to_energy(wavelength: float) -> float:
