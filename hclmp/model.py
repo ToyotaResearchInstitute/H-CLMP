@@ -150,6 +150,30 @@ class Hclmp(torch.nn.Module):
 
     def forward(self, label, gen_feat, elem_weights, elem_fea, self_fea_idx,
                 nbr_fea_idx, cry_elem_idx):
+        """
+        Forward pass of the model. This should only be used for training. For
+        prediction, please use the `predict` method.
+
+        Args:
+            label:  The ground-truth label of the training point
+
+            gen_feat:  Features generated from WGAN to be used in transfer
+            learning
+
+            elem_weights:  The graph weights for each element. This could be
+            the composition of each element (in the simplest case), or an
+            augmented form thereof (after training and/or transfer learning).
+
+            elem_fea:  The matrix of features for each element
+
+            self_fea_idx:  Indices of the first element in each element pair
+            (i.e., "self)")
+
+            nbr_fea_idx:  Indices of the second element in each element pair
+            (i.e., "neighbor")
+
+            cry_elem_idx:  Mapping from the element index to the crystal index
+        """
 
         # We use the graph attention neural network from the Roost model to
         # encoder element composition features.  Please refer to the work of
