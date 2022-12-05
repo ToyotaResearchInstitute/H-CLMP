@@ -150,7 +150,7 @@ class Hclmp(torch.nn.Module):
         return fx_output
 
     def forward(self, label, gen_feat, elem_weights, elem_fea, self_fea_idx,
-                nbr_fea_idx, cry_elem_idx):
+                nbr_fea_idx, cry_elem_idx, penultimate=False):
         """
         Forward pass of the model. This should only be used for training. For
         prediction, please use the `predict` method.
@@ -174,6 +174,13 @@ class Hclmp(torch.nn.Module):
             (i.e., "neighbor")
 
             cry_elem_idx:  Mapping from the element index to the crystal index
+
+            penultimate (bool):  Whether to return the output signals from the
+            penultimate layer rather than the normal output. Ignored if not
+            doing label correlation.
+
+        Returns:
+            dict:  A dictionary containing several pieces of information
         """
 
         # We use the graph attention neural network from the Roost model to
@@ -232,6 +239,10 @@ class Hclmp(torch.nn.Module):
             feat_out = self.transformer_encoder(feat_out)
             label_out = label_out.transpose(0, 1)  # [bs, label_dim, emb_size]
             feat_out = feat_out.transpose(0, 1)  # [bs, label_dim, emb_size]
+
+            if penultimate:
+                return feat_out
+
             label_out = self.out_after_atten(label_out).squeeze()*0.5 + label_out0
             feat_out = self.out_after_atten_x(feat_out).squeeze()*0.5 + feat_out0
 
@@ -241,6 +252,23 @@ class Hclmp(torch.nn.Module):
         output['label_out'] = label_out
         output['feat_out'] = feat_out
         return output
+
+    def _make_dummy_labels(self, batch_dims: tuple) -> torch.tensor:
+        """
+        Make a set of dummy labels. Useful for feeding to the model during
+        predictions, when we don't have label values.
+
+        Args:
+            batch_dims (tuple):  Tuple of integers indicating the dimensions
+            that you want the matrix of dummy labels to have
+
+        Returns:
+            torch.tensor:  Dummy values for labels
+        """
+
+        random_samples = np.random.uniform(low=0.01, high=1, size=batch_dims)
+        dummy_labels = torch.from_numpy(random_samples).to(self.device).float()
+        return dummy_labels
 
     def predict(self, gen_feat, elem_weights, elem_fea, self_fea_idx,
                 nbr_fea_idx, cry_elem_idx):
@@ -269,7 +297,7 @@ class Hclmp(torch.nn.Module):
             cry_elem_idx:  Mapping from the element index to the crystal index
 
         Returns:
-            dict: The output predictions
+            torch.tensor: The output predictions
         """
 
         # Due to issues with technical debt, the forward method requires a
@@ -278,16 +306,57 @@ class Hclmp(torch.nn.Module):
         # is ignored during prediction. To poke-yoke this, we manually feed the
         # forward method uniform random samples as the "labels".
         batch_dims = (len(gen_feat), self.label_dim)
-        random_samples = np.random.uniform(low=0.01, high=1, size=batch_dims)
-        dummy_labels = torch.from_numpy(random_samples).to(self.device).float()
+        dummy_labels = self._make_dummy_labels(batch_dims=batch_dims)
 
-        return self.forward(label=dummy_labels,
-                            gen_feat=gen_feat,
-                            elem_weights=elem_weights,
-                            elem_fea=elem_fea,
-                            self_fea_idx=self_fea_idx,
-                            nbr_fea_idx=nbr_fea_idx,
-                            cry_elem_idx=cry_elem_idx)
+        output = self.forward(label=dummy_labels,
+                              gen_feat=gen_feat,
+                              elem_weights=elem_weights,
+                              elem_fea=elem_fea,
+                              self_fea_idx=self_fea_idx,
+                              nbr_fea_idx=nbr_fea_idx,
+                              cry_elem_idx=cry_elem_idx)
+        return output['feat_out']
+
+    def get_penultimate_output(self, gen_feat, elem_weights, elem_fea,
+                               self_fea_idx, nbr_fea_idx, cry_elem_idx):
+        """
+        It some cases (like NN-GPs), it may be useful to get the output of the
+        penultimate layer in the network. This method will return it.
+
+        Args:
+            gen_feat:  Features generated from WGAN to be used in transfer
+            learning
+
+            elem_weights:  The graph weights for each element. This could be
+            the composition of each element (in the simplest case), or an
+            augmented form thereof (after training and/or transfer learning).
+
+            elem_fea:  The matrix of features for each element
+
+            self_fea_idx:  Indices of the first element in each element pair
+            (i.e., "self)")
+
+            nbr_fea_idx:  Indices of the second element in each element pair
+            (i.e., "neighbor")
+
+            cry_elem_idx:  Mapping from the element index to the crystal index
+
+        Returns:
+            torch.tensor: The output of the penultimate network layer
+        """
+
+        batch_dims = (len(gen_feat), self.label_dim)
+        dummy_labels = self._make_dummy_labels(batch_dims=batch_dims)
+
+        pen_output = self.forward(label=dummy_labels,
+                                  gen_feat=gen_feat,
+                                  elem_weights=elem_weights,
+                                  elem_fea=elem_fea,
+                                  self_fea_idx=self_fea_idx,
+                                  nbr_fea_idx=nbr_fea_idx,
+                                  cry_elem_idx=cry_elem_idx,
+                                  penultimate=True)
+        return pen_output
 
 
 def compute_loss(input_label, output):
