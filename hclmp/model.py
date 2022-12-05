@@ -87,6 +87,7 @@ class Hclmp(torch.nn.Module):
         self.register_parameter("r_sqrt_sigma", r_sqrt_sigma)
 
     def label_encode(self, x):
+        x = x.to(self.device)
         h1 = self.dropout(functional.relu(self.fe1(x)))  # [label_dim, 512]
         h2 = self.dropout(functional.relu(self.fe2(h1)))  # [label_dim, 256]
         mu = self.fe_mu(h2) * self.scale_coeff  # [label_dim, latent_dim]
@@ -241,65 +242,52 @@ class Hclmp(torch.nn.Module):
         output['feat_out'] = feat_out
         return output
 
-    def predict(self, inputs: tuple, gen_feat=None):
+    def predict(self, gen_feat, elem_weights, elem_fea, self_fea_idx,
+                nbr_fea_idx, cry_elem_idx):
         """
-        Use input features to make a prediction on the output. Note that the
-        `forward` method would normally be used to do this, but we use the
-        `forward` method during training (not prediction). And during training,
-        we use labels to train the encoder. This method skips encoder training
-        and does not need labels.
+        `forward` method would normally be used to do this, but the
+        documentation of the `forward` method here is set up only for training
+        (not prediction). This method wraps the `forward` method with a better
+        API to remove the need for providing a label.
 
         Args:
-            inputs (tuple): Tuple of tensors for the inputs
+            gen_feat:  Features generated from WGAN to be used in transfer
+            learning
 
-            gen_feat (tuple): Tuple of generated features from the GAN. Unused
-            if the `self.transfer_type` is not `'gen_feat'`.
+            elem_weights:  The graph weights for each element. This could be
+            the composition of each element (in the simplest case), or an
+            augmented form thereof (after training and/or transfer learning).
+
+            elem_fea:  The matrix of features for each element
+
+            self_fea_idx:  Indices of the first element in each element pair
+            (i.e., "self)")
+
+            nbr_fea_idx:  Indices of the second element in each element pair
+            (i.e., "neighbor")
+
+            cry_elem_idx:  Mapping from the element index to the crystal index
 
         Returns:
-            torch.tensor: The output predictions
+            dict: The output predictions
         """
 
-        feat = self.graph_encoder(*inputs)  # (bs, 64)
+        # Due to issues with technical debt, the forward method requires a
+        # label argument, even during prediction. It may appear as though the
+        # label is used to make predictions, but the intent is that the label
+        # is ignored during prediction. To poke-yoke this, we manually feed the
+        # forward method uniform random samples as the "labels".
+        batch_dims = (len(gen_feat), self.label_dim)
+        random_samples = np.random.uniform(size=batch_dims)
+        dummy_labels = torch.from_numpy(random_samples).float()
 
-        if self.transfer_type == 'gen_feat':
-            gen_feat = self.gen_feat_map(gen_feat)
-            feat = torch.cat((feat, gen_feat), dim=1)
-
-        fx_output = self.feat_forward(feat)
-        feat_emb = fx_output['feat_emb']  # [bs, emb_size]
-        embs = self.fe0.weight  # [emb_size, label_dim]
-
-        if not self.label_correlation:
-            # [bs, emb_size] * [emb_size, label_dim] = [bs, label_dim]
-            feat_out = torch.matmul(feat_emb, embs)  # [bs, label_dim]
-        else:
-            # [bs, emb_size] * [emb_size, label_dim] = [bs, label_dim]
-            feat_out0 = torch.matmul(feat_emb, embs)  # [bs, label_dim]
-
-            # generate label embedding from label multivariate Gaussian,
-            # perform global label correlation learning
-            noise = torch.normal(
-                0, 1,
-                size=(embs.shape[0], feat_out0.shape[0], int(feat_out0.shape[1]))
-            ).to(self.device)  # [emb_size, bs, label_dim]
-
-            # [label_dim, label_dim]
-            B = self.r_sqrt_sigma.T.float().to(self.device)
-            # [emb_size, bs, label_dim]
-            feat_emb = torch.tensordot(noise, B, dims=1) + feat_out0
-            # [emb_size, bs, label_dim]
-            feat_emb = functional.normalize(feat_emb, dim=0)
-            # [bs, label_dim, emb_size]
-            feat_out = feat_emb.permute(1, 2, 0)
-
-            # run label attention graph, perform conditional higher-order label
-            # correlation learning
-            feat_out = feat_out.transpose(0, 1)  # [label_dim, bs, emb_size]
-            feat_out = self.transformer_encoder(feat_out)
-            feat_out = feat_out.transpose(0, 1)  # [bs, label_dim, emb_size]
-            feat_out = self.out_after_atten_x(feat_out).squeeze()*0.5 + feat_out0
-
-        return feat_out
+        return self.forward(label=dummy_labels,
+                            gen_feat=gen_feat,
+                            elem_weights=elem_weights,
+                            elem_fea=elem_fea,
+                            self_fea_idx=self_fea_idx,
+                            nbr_fea_idx=nbr_fea_idx,
+                            cry_elem_idx=cry_elem_idx)
 
 
 def compute_loss(input_label, output):
