@@ -278,8 +278,8 @@ class Hclmp(torch.nn.Module):
         # is ignored during prediction. To poke-yoke this, we manually feed the
         # forward method uniform random samples as the "labels".
         batch_dims = (len(gen_feat), self.label_dim)
-        random_samples = np.random.uniform(size=batch_dims)
-        dummy_labels = torch.from_numpy(random_samples).float()
+        random_samples = np.random.uniform(low=0.01, high=1, size=batch_dims)
+        dummy_labels = torch.from_numpy(random_samples).to(self.device).float()
 
         return self.forward(label=dummy_labels,
                             gen_feat=gen_feat,
