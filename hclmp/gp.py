@@ -6,7 +6,91 @@ __author__ = 'Kevin Tran'
 __email__ = 'kevin.tran@tri.global'
 
 import gpytorch
+import matplotlib.pyplot as plt
+import numpy as np
+import seaborn as sns
 import torch
+# import torch.optim
+import torch.utils.data
+from tqdm.auto import tqdm
+
+import hclmp.core
+import hclmp.graph_encoder
+import hclmp.model
+
+
+class PenultDataset(torch.utils.data.Dataset):
+    """
+    Dataset whose inputs are the outputs from the penultimate layer of an
+    H-CMLP model. The outputs of this dataset are the labels used during
+    training of the H-CMLP model.
+    """
+
+    def __init__(self,
+                 model: hclmp.model.Hclmp,
+                 comp_dataset: hclmp.graph_encoder.CompositionData,
+                 device: torch.device = None,
+                 ):
+        """
+        Initialize this dataset
+
+        Args:
+            model (hclmp.model.Hclmp): Instance of a trained H-CMLP model
+
+            comp_dataset (hclmp.graph_encoder.CompositionData): The dataset
+            used to train the given model
+
+            device (torch.device): The device that you want this model to run
+            on. If `None`, then uses any available GP.
+        """
+
+        self.model = model
+        self.comp_dataset = comp_dataset
+
+        if device is None:
+            device = (torch.device('cuda') if torch.cuda.is_available() else
+                      torch.device('cpu'))
+        self.device = device
+
+        self._get_penult()
+
+    def __len__(self):
+        return len(self.comp_dataset)
+
+    def __getitem__(self, idx):
+
+        _, targets, _, _, _ = self.comp_dataset[idx]
+        inputs = self.pen_values[idx]
+        return inputs, targets
+
+    def _get_penult(self):
+        """
+        Feed the composition dataset to the trained H-CLMP model to get the
+        output of the penultimate layer in H-CLMP.
+        """
+
+        # Initialize predictions
+        loader = torch.utils.data.DataLoader(
+            self.comp_dataset,
+            batch_size=2**9,
+            shuffle=False,
+            collate_fn=hclmp.graph_encoder.collate_batch)
+
+        self.model.eval()
+        pen_values = []
+
+        # Calculate penultimate output
+        with torch.no_grad():
+            batch_iterator = tqdm(loader, desc='Generating penultimate values')
+            for x_batch, _, generated_feature_batch, _, _ in batch_iterator:
+                x_batch = tuple(feature.to(self.device) for feature in x_batch)
+                penult = self.model.get_penultimate_output(
+                    generated_feature_batch, *x_batch)
+
+                # Store the data
+                pen_values.append(penult.cpu().numpy())
+        pen_values_stacked = np.concatenate(pen_values, axis=0)
+        self.pen_values = torch.tensor(pen_values_stacked).to(self.device)
 
 
 class MultiTaskSVGP(gpytorch.models.ApproximateGP):
@@ -47,12 +131,12 @@ class MultiTaskSVGP(gpytorch.models.ApproximateGP):
                       torch.device('cpu'))
 
         # Let's use a different set of inducing points for each latent function
-        inducing_points = torch.rand(num_latents, n_inducing_pts, 1).to(device)
+        self.inducing_points = torch.rand(num_latents, n_inducing_pts, 1).to(device)
 
         # We have to mark the CholeskyVariationalDistribution as batch so that
         # we learn a variational distribution for each task
         variational_distribution = gpytorch.variational.CholeskyVariationalDistribution(
-            inducing_points.size(-2), batch_shape=torch.Size([num_latents])
+            self.inducing_points.size(-2), batch_shape=torch.Size([num_latents])
         )
 
         # We have to wrap the VariationalStrategy in a LMCVariationalStrategy
@@ -60,7 +144,7 @@ class MultiTaskSVGP(gpytorch.models.ApproximateGP):
         # a batch output
         base_var_strat = gpytorch.variational.VariationalStrategy(
             self,
-            inducing_points,
+            self.inducing_points,
             variational_distribution,
             learn_inducing_locations=True
         )
@@ -88,3 +172,87 @@ class MultiTaskSVGP(gpytorch.models.ApproximateGP):
         mean_x = self.mean_module(x)
         covar_x = self.covar_module(x)
         return gpytorch.distributions.MultivariateNormal(mean_x, covar_x)
+
+    def train_on_loader(
+        self,
+        data_loader: torch.utils.data.DataLoader,
+        likelihood: gpytorch.likelihoods.MultitaskGaussianLikelihood,
+        optimizer: torch.optim.Optimizer,
+        n_epochs: int = 20,
+        device: torch.device = None
+    ):
+        """
+        Train this multitask SVGP
+
+        Args:
+            data_loader (torch.utils.data.DataLoader): The data loader
+            containing the training dataset to use
+
+            likelihood (gpytorch.likelihoods.MultitaskGaussianLikelihood): The
+            likelihood object that should be used for this GP. The `num_tasks`
+            argument used to instantiate this likelihood should probably be
+            equal to the number of tasks that this GP is meant to perform.
+
+            optimizer (torch.optim.Optimizer): The optimizer to use to find the
+            model parameters
+
+            n_epochs (int): The number of epochs that should be used to train
+            this model
+
+            device (torch.device): The device (e.g., CPU or GPU) that should be
+            used during training. If `None` will default to cuda (if
+            available).
+        """
+
+        # Auto-detection of the device to use (if necessary)
+        if device is None:
+            cuda_available = bool(torch.cuda.device_count())
+            device = torch.device('cuda') if cuda_available else torch.device('cpu')
+
+        # If we're in a notebook, we'll use a dynamic plot of the loss.  But if
+        # we're in a normal python thread, then we'll just use tqdm and print
+        # statements.
+        notebook = hclmp.core.is_notebook()
+        if notebook:
+            fig = plt.figure()
+            ax = fig.subplots(1, 1)
+            from IPython.display import display, clear_output
+
+        # Initialize training
+        self.train()
+        mll = gpytorch.mlls.VariationalELBO(likelihood=likelihood,
+                                            model=self,
+                                            num_data=len(data_loader.dataset))
+        losses = []
+        minibatches = []
+
+        epoch_iter = tqdm(range(n_epochs), total=n_epochs, desc='Epochs')
+        for epoch in epoch_iter:
+
+            # Divide training of each epoch into batches
+            minibatch_iter = tqdm(data_loader, desc='Minibatch')
+            for x_batch, y_batch in minibatch_iter:
+                x_batch.to(device)
+                y_batch.to(device)
+
+                # Train on this one batch
+                optimizer.zero_grad()
+                output = self(x_batch)
+                loss = -mll(output, y_batch)
+                epoch_iter.set_postfix(loss=loss.item())
+                loss.backward()
+                optimizer.step()
+
+                # Display the loss via dynamically updating plot
+                if notebook:
+                    ax.clear()
+                    ax.set_xlim([0, n_epochs * len(data_loader)])
+                    min_loss = float(min([0] + [min(loss) for loss in losses.values()]))
+                    max_loss = float(max(max(loss) for loss in losses.values()))
+                    ax.set_ylim([min_loss, max_loss])
+                    ax.set_xlabel('Minibatch #')
+                    ax.set_ylabel('Loss')
+                    for loss_name, loss in losses.items():
+                        sns.lineplot(x=minibatches, y=loss, ax=ax, label=loss_name)
+                    display(fig)
+                    clear_output(wait=True)
