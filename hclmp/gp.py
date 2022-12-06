@@ -10,7 +10,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
 import torch
-# import torch.optim
 import torch.utils.data
 from tqdm.auto import tqdm
 
@@ -72,7 +71,7 @@ class PenultDataset(torch.utils.data.Dataset):
         # Initialize predictions
         loader = torch.utils.data.DataLoader(
             self.comp_dataset,
-            batch_size=2**9,
+            batch_size=2**9,  # Make this smaller if you hit memory issues
             shuffle=False,
             collate_fn=hclmp.graph_encoder.collate_batch)
 
@@ -87,7 +86,7 @@ class PenultDataset(torch.utils.data.Dataset):
                 penult = self.model.get_penultimate_output(
                     generated_feature_batch, *x_batch)
 
-                # Store the data
+                # Format/store the data
                 pen_values.append(penult.cpu().numpy())
         pen_values_stacked = np.concatenate(pen_values, axis=0)
         self.pen_values = torch.tensor(pen_values_stacked).to(self.device)
@@ -102,8 +101,9 @@ class MultiTaskSVGP(gpytorch.models.ApproximateGP):
 
     def __init__(self,
                  num_tasks: int,
+                 num_features: int,
                  num_latents: int = 1,
-                 n_inducing_pts: int = 16,
+                 num_inducing_points: int = 16,
                  device: torch.device = None,
                  ):
         """
@@ -113,14 +113,16 @@ class MultiTaskSVGP(gpytorch.models.ApproximateGP):
             num_tasks (int): The number of tasks/objectives for this model to
             be learning/predicting
 
+            num_features (int): The number of inputs/features for this GP
+
             num_latents (int): This model assumes that each of the
             tasks/objectives/outputs are linear combinations of some latent GP
             functions. This argument allows you to choose the number of these
             latent functions.
 
-            n_inducing_pts (int): The number of inducing points to use for the
-            kernel approximation. Higher numbers yield more accurate results,
-            but they come at higher memory costs.
+            num_inducing_points (int): The number of inducing points to use for
+            the kernel approximation. Higher numbers yield more accurate
+            results, but they come at higher memory costs.
 
             device (torch.device): The device that you want this model to run
             on. If `None`, then uses any available GP.
@@ -129,31 +131,34 @@ class MultiTaskSVGP(gpytorch.models.ApproximateGP):
         if device is None:
             device = (torch.device('cuda') if torch.cuda.is_available() else
                       torch.device('cpu'))
+        self.device = device
 
         # Let's use a different set of inducing points for each latent function
-        self.inducing_points = torch.rand(num_latents, n_inducing_pts, 1).to(device)
+        self.inducing_points = torch.rand(
+            num_latents, num_inducing_points, num_features).to(self.device)
 
         # We have to mark the CholeskyVariationalDistribution as batch so that
         # we learn a variational distribution for each task
         variational_distribution = gpytorch.variational.CholeskyVariationalDistribution(
-            self.inducing_points.size(-2), batch_shape=torch.Size([num_latents])
-        )
+            num_inducing_points=num_inducing_points,
+            batch_shape=torch.Size([num_latents]),
+        ).to(self.device)
 
         # We have to wrap the VariationalStrategy in a LMCVariationalStrategy
         # so that the output will be a MultitaskMultivariateNormal rather than
         # a batch output
-        base_var_strat = gpytorch.variational.VariationalStrategy(
-            self,
-            self.inducing_points,
-            variational_distribution,
-            learn_inducing_locations=True
-        )
+        base_variational_strategy = gpytorch.variational.VariationalStrategy(
+            model=self,
+            inducing_points=self.inducing_points,
+            variational_distribution=variational_distribution,
+            learn_inducing_locations=True,
+        ).to(self.device)
         lmc_var_strat = gpytorch.variational.LMCVariationalStrategy(
-            base_var_strat,
+            base_variational_strategy=base_variational_strategy,
             num_tasks=num_tasks,
             num_latents=num_latents,
-            latent_dim=-1
-        )
+            latent_dim=-1,
+        ).to(self.device)
 
         super().__init__(lmc_var_strat)
 
@@ -161,16 +166,17 @@ class MultiTaskSVGP(gpytorch.models.ApproximateGP):
         # so we learn a different set of hyperparameters
         self.mean_module = gpytorch.means.ConstantMean(
             batch_shape=torch.Size([num_latents]))
-        kernel = gpytorch.kernels.MaternKernel(batch_shape=torch.Size([num_latents]))
+        kernel = gpytorch.kernels.MaternKernel(
+            batch_shape=torch.Size([num_latents])).to(self.device)
         self.covar_module = gpytorch.kernels.ScaleKernel(
-            kernel, batch_shape=torch.Size([num_latents]))
+            kernel, batch_shape=torch.Size([num_latents])).to(self.device)
 
     def forward(self, x):
 
         # The forward function should be written as if we were dealing with each output
         # dimension in batch
-        mean_x = self.mean_module(x)
-        covar_x = self.covar_module(x)
+        mean_x = self.mean_module(x).to(self.device)
+        covar_x = self.covar_module(x).to(self.device)
         return gpytorch.distributions.MultivariateNormal(mean_x, covar_x)
 
     def train_on_loader(
@@ -232,8 +238,8 @@ class MultiTaskSVGP(gpytorch.models.ApproximateGP):
             # Divide training of each epoch into batches
             minibatch_iter = tqdm(data_loader, desc='Minibatch')
             for x_batch, y_batch in minibatch_iter:
-                x_batch.to(device)
-                y_batch.to(device)
+                x_batch = x_batch.to(device)
+                y_batch = y_batch.to(device)
 
                 # Train on this one batch
                 optimizer.zero_grad()
@@ -244,15 +250,16 @@ class MultiTaskSVGP(gpytorch.models.ApproximateGP):
                 optimizer.step()
 
                 # Display the loss via dynamically updating plot
+                losses.append(float(loss))
+                minibatches.append(len(losses))
                 if notebook:
                     ax.clear()
                     ax.set_xlim([0, n_epochs * len(data_loader)])
-                    min_loss = float(min([0] + [min(loss) for loss in losses.values()]))
-                    max_loss = float(max(max(loss) for loss in losses.values()))
+                    min_loss = min(0, min(losses))
+                    max_loss = max(losses)
                     ax.set_ylim([min_loss, max_loss])
                     ax.set_xlabel('Minibatch #')
                     ax.set_ylabel('Loss')
-                    for loss_name, loss in losses.items():
-                        sns.lineplot(x=minibatches, y=loss, ax=ax, label=loss_name)
+                    sns.lineplot(x=minibatches, y=losses, ax=ax)
                     display(fig)
                     clear_output(wait=True)
