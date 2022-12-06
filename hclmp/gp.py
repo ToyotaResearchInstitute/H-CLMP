@@ -263,3 +263,36 @@ class MultiTaskSVGP(gpytorch.models.ApproximateGP):
                     sns.lineplot(x=minibatches, y=losses, ax=ax)
                     display(fig)
                     clear_output(wait=True)
+
+    def predict(self,
+                data_loader: torch.utils.data.DataLoader,
+                likelihood: gpytorch.likelihoods.Likelihood,
+                ) -> (np.ndarray, np.ndarray):
+        """
+        Make predictions on the trained model
+
+        Args:
+            likelihood (likelihoods.Likelihood): The likelihood to use when
+            making predictions. This should probably be the same likelihood
+            used during training, but you do you.
+
+            data_loader (torch.utils.data.DataLoader): The data to make
+            predictions on
+
+        Returns:
+            (np.ndarray, np.ndarray): The mean and standard error predictions,
+            respectively
+        """
+
+        self.eval()
+        likelihood.eval()
+
+        means, stddevs = [], []
+        with torch.no_grad():
+            for x_batch, y_batch in data_loader:
+
+                preds = self(x_batch)
+                means.extend(preds.mean.cpu().tolist())
+                stddevs.extend(preds.stddev.cpu().tolist())
+
+        return np.array(means), np.array(stddevs)
