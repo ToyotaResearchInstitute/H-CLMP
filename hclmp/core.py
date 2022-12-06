@@ -163,11 +163,11 @@ def train_new(model: Hclmp,
     best_loss = np.inf
     minibatches = []
 
-    epoch_iter = tqdm_(range(num_epochs), total=num_epochs, desc='Epochs', leave=False)
+    epoch_iter = tqdm_(range(num_epochs), total=num_epochs, desc='Epochs')
     for epoch in epoch_iter:
 
         # Divide training of each epoch into batches
-        minibatch_iter = tqdm_(data_loader, desc='Minibatch', leave=False)
+        minibatch_iter = tqdm_(data_loader, desc='Minibatch')
         for input_, y, gen_feat, _, _ in minibatch_iter:
 
             input_ = (tensor.to(device) for tensor in input_)
