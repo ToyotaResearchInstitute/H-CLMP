@@ -5,6 +5,8 @@ This submodule contains code for creating and handling Gaussian Processes.
 __author__ = 'Kevin Tran'
 __email__ = 'kevin.tran@tri.global'
 
+from textwrap import dedent
+
 import gpytorch
 import matplotlib.pyplot as plt
 import numpy as np
@@ -100,16 +102,19 @@ class MultiTaskSVGP(gpytorch.models.ApproximateGP):
     """
 
     def __init__(self,
+                 inducing_points: torch.tensor,
                  num_tasks: int,
                  num_features: int,
                  num_latents: int = 1,
-                 num_inducing_points: int = 16,
                  device: torch.device = None,
                  ):
         """
         Initialize this multi-objective SVGP
 
         Args:
+            inducing_points (torch.tensor): The inducing points to use. The
+            shape should be (num_latents, num_inducing_points, num_features)
+
             num_tasks (int): The number of tasks/objectives for this model to
             be learning/predicting
 
@@ -120,59 +125,112 @@ class MultiTaskSVGP(gpytorch.models.ApproximateGP):
             functions. This argument allows you to choose the number of these
             latent functions.
 
-            num_inducing_points (int): The number of inducing points to use for
-            the kernel approximation. Higher numbers yield more accurate
-            results, but they come at higher memory costs.
-
             device (torch.device): The device that you want this model to run
             on. If `None`, then uses any available GP.
         """
 
-        if device is None:
-            device = (torch.device('cuda') if torch.cuda.is_available() else
-                      torch.device('cpu'))
+        self.inducing_points = inducing_points
+        self.num_inducing_points = self.inducing_points.size(1)
+        self.num_tasks = num_tasks
+        self.num_features = num_features
+        self.num_latents = num_latents
         self.device = device
 
-        # Let's use a different set of inducing points for each latent function
-        self.inducing_points = torch.rand(
-            num_latents, num_inducing_points, num_features).to(self.device)
+        self._parse_init_args()
+        lmc_var_strat = self._create_var_strat()
+
+        super().__init__(lmc_var_strat)
+
+        self._create_covar()
+
+    def _parse_init_args(self):
+        """
+        Argument handling and parsing of the arguments for `__init__`. You
+        really shouldn't be calling this method outside `__init__`.
+        """
+
+        # Argument parsing
+        if self.inducing_points.size(0) != self.num_latents:
+            msg = dedent(f"""
+                The first dimension of the inducing points
+                         ({self.inducing_points.size(0)}) does not match the
+                         number of latent functions ({self.num_latents})
+                """)
+            raise ValueError(msg)
+
+        if self.inducing_points.size(2) != self.num_features:
+            msg = dedent(f"""
+                The third dimension of the inducing points
+                         ({self.inducing_points.size(2)}) does not match the
+                         number of features ({self.num_features})
+                """)
+            raise ValueError(msg)
+
+        if self.device is None:
+            self.device = (torch.device('cuda') if torch.cuda.is_available()
+                           else torch.device('cpu'))
+
+    def _create_var_strat(self):
+        """
+        Creates a variational strategy suitable for a multi-task SVGP
+
+        Returns:
+            gpytorch.variational.LMCVariationalStrategy: The variational
+            strategy to use for this model
+        """
 
         # We have to mark the CholeskyVariationalDistribution as batch so that
         # we learn a variational distribution for each task
-        variational_distribution = gpytorch.variational.CholeskyVariationalDistribution(
-            num_inducing_points=num_inducing_points,
-            batch_shape=torch.Size([num_latents]),
+        var_dist = gpytorch.variational.CholeskyVariationalDistribution
+        variational_distribution = var_dist(
+            num_inducing_points=self.num_inducing_points,
+            batch_shape=torch.Size([self.num_latents]),
         ).to(self.device)
 
         # We have to wrap the VariationalStrategy in a LMCVariationalStrategy
         # so that the output will be a MultitaskMultivariateNormal rather than
         # a batch output
-        base_variational_strategy = gpytorch.variational.VariationalStrategy(
+        base_var_strat = gpytorch.variational.VariationalStrategy
+        base_variational_strategy = base_var_strat(
             model=self,
             inducing_points=self.inducing_points,
             variational_distribution=variational_distribution,
             learn_inducing_locations=True,
         ).to(self.device)
+
         lmc_var_strat = gpytorch.variational.LMCVariationalStrategy(
             base_variational_strategy=base_variational_strategy,
-            num_tasks=num_tasks,
-            num_latents=num_latents,
+            num_tasks=self.num_tasks,
+            num_latents=self.num_latents,
             latent_dim=-1,
         ).to(self.device)
+        return lmc_var_strat
 
-        super().__init__(lmc_var_strat)
+    def _create_covar(self):
+        """
+        Creates a the covariance module to use for this model
+        """
 
         # The mean and covariance modules should be marked as batch
         # so we learn a different set of hyperparameters
         self.mean_module = gpytorch.means.ConstantMean(
-            batch_shape=torch.Size([num_latents]))
-        kernel = gpytorch.kernels.MaternKernel(
-            batch_shape=torch.Size([num_latents])).to(self.device)
+            batch_shape=torch.Size([self.num_latents]))
+
+        self.lengthscale_constraint = gpytorch.constraints.constraints.Interval(
+            lower_bound=0, upper_bound=2)
+
+        self.kernel = gpytorch.kernels.MaternKernel(
+            batch_shape=torch.Size([self.num_latents]),
+            nu=0.5,
+            lengthscale_constraint=self.lengthscale_constraint,
+        ).to(self.device)
+
         self.covar_module = gpytorch.kernels.ScaleKernel(
-            kernel, batch_shape=torch.Size([num_latents])).to(self.device)
+            self.kernel,
+            batch_shape=torch.Size([self.num_latents]),
+        ).to(self.device)
 
     def forward(self, x):
-
         # The forward function should be written as if we were dealing with each output
         # dimension in batch
         mean_x = self.mean_module(x).to(self.device)
@@ -212,8 +270,7 @@ class MultiTaskSVGP(gpytorch.models.ApproximateGP):
 
         # Auto-detection of the device to use (if necessary)
         if device is None:
-            cuda_available = bool(torch.cuda.device_count())
-            device = torch.device('cuda') if cuda_available else torch.device('cpu')
+            device = self.device
 
         # If we're in a notebook, we'll use a dynamic plot of the loss.  But if
         # we're in a normal python thread, then we'll just use tqdm and print
