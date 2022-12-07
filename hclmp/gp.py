@@ -216,12 +216,16 @@ class MultiTaskSVGP(gpytorch.models.ApproximateGP):
         self.mean_module = gpytorch.means.ConstantMean(
             batch_shape=torch.Size([self.num_latents]))
 
+        # prior_class = gpytorch.priors.torch_priors.MultivariateNormalPrior
+        # self.lengthscale_prior = prior_class(loc=0)
+
         self.lengthscale_constraint = gpytorch.constraints.constraints.Interval(
             lower_bound=0, upper_bound=2)
 
         self.kernel = gpytorch.kernels.MaternKernel(
             batch_shape=torch.Size([self.num_latents]),
             nu=0.5,
+            # lengthscale_prior=self.lengthscale_prior,
             lengthscale_constraint=self.lengthscale_constraint,
         ).to(self.device)
 
