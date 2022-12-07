@@ -213,24 +213,32 @@ class MultiTaskSVGP(gpytorch.models.ApproximateGP):
 
         # The mean and covariance modules should be marked as batch
         # so we learn a different set of hyperparameters
+
+        mean_prior = gpytorch.priors.NormalPrior(
+            loc=0.5, scale=0.16)
+        mean_constraint = gpytorch.constraints.constraints.Interval(
+            lower_bound=0, upper_bound=1)
         self.mean_module = gpytorch.means.ConstantMean(
-            batch_shape=torch.Size([self.num_latents]))
+            constant_prior=mean_prior,
+            constant_constraint=mean_constraint,
+            batch_shape=torch.Size([self.num_latents]),
+        )
 
         # prior_class = gpytorch.priors.torch_priors.MultivariateNormalPrior
-        # self.lengthscale_prior = prior_class(loc=0)
+        # lengthscale_prior = prior_class(loc=0)
 
-        self.lengthscale_constraint = gpytorch.constraints.constraints.Interval(
-            lower_bound=0, upper_bound=2)
+        # lengthscale_constraint = gpytorch.constraints.constraints.Interval(
+        #     lower_bound=0, upper_bound=10)
 
-        self.kernel = gpytorch.kernels.MaternKernel(
+        kernel = gpytorch.kernels.MaternKernel(
             batch_shape=torch.Size([self.num_latents]),
             nu=0.5,
-            # lengthscale_prior=self.lengthscale_prior,
-            lengthscale_constraint=self.lengthscale_constraint,
+            # lengthscale_prior=lengthscale_prior,
+            # lengthscale_constraint=lengthscale_constraint,
         ).to(self.device)
 
         self.covar_module = gpytorch.kernels.ScaleKernel(
-            self.kernel,
+            kernel,
             batch_shape=torch.Size([self.num_latents]),
         ).to(self.device)
 
