@@ -47,38 +47,6 @@ def parse_vector(vec: str) -> np.ndarray:
     return np.array(str(vec)[1:-1].split(', '))
 
 
-def get_plate_data(data_file: str,
-                   n_bins: int = 20,
-                   force: bool = False) -> pd.DataFrame:
-    """
-    Get all of the elements that are present in the given data file
-
-    Args:
-        data_file (str): The file containing all of the data for the plates
-
-        n_bins (int): We will discretize the UV-VIS spectra into bins. Use this
-        argument to define the number of bins.
-
-        force (bool): Whether to ignore the cache
-
-    Returns:
-        pd.DataFrame: the processed plate data
-    """
-
-    cache_name = DATA_CACHE % n_bins
-
-    # EAFP to read the cache, if it's there
-    if not force:
-        try:
-            return pd.read_csv(cache_name)
-        except FileNotFoundError:
-            pass
-
-    df = parse_inkjet_data(data_file=data_file, n_bins=n_bins)
-    df.to_csv(cache_name, index=False)
-    return df
-
-
 def parse_inkjet_data(plates_data: dict,
                       n_bins: int = 20) -> pd.DataFrame:
     """
@@ -101,10 +69,7 @@ def parse_inkjet_data(plates_data: dict,
     data = collections.defaultdict(list)
 
     for plate_id, plate_data in tqdm(plates_data.items(), desc='Plates'):
-        sample_iterator = tqdm(enumerate(plate_data[SAMPLE_NUM_COL]),
-                               desc=f'Discretizing plate {plate_id}',
-                               total=len(plate_data[SAMPLE_NUM_COL]))
-        for sample_idx, sample_num in sample_iterator:
+        for sample_idx, sample_num in enumerate(plate_data[SAMPLE_NUM_COL]):
 
             # Grab the composition data for each sample
             compositions = collections.defaultdict(float)
