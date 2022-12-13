@@ -22,8 +22,8 @@ class Hclmp(torch.nn.Module):
 
         super().__init__()
         input_dim = 64
-        self.latent_dim = 128
-        self.emb_size = 512
+        self.latent_dim = 1
+        self.emb_size = 4
         self.label_dim = label_dim
         self.scale_coeff = 1.0
         self.transfer_type = transfer_type
