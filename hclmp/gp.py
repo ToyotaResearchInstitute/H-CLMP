@@ -137,9 +137,9 @@ class MultiTaskSVGP(gpytorch.models.ApproximateGP):
         self.device = device
 
         self._parse_init_args()
-        lmc_var_strat = self._create_var_strat()
+        var_strat = self._create_var_strat()
 
-        super().__init__(lmc_var_strat)
+        super().__init__(var_strat)
 
         self._create_covar()
 
@@ -150,7 +150,8 @@ class MultiTaskSVGP(gpytorch.models.ApproximateGP):
         """
 
         # Argument parsing
-        if self.inducing_points.size(0) != self.num_latents:
+        # if self.inducing_points.size(0) != self.num_tasks:  # for ind multitask
+        if self.inducing_points.size(0) != self.num_latents:  # for LMC
             msg = dedent(
                 f"""
                 The first dimension of the inducing points
@@ -177,8 +178,8 @@ class MultiTaskSVGP(gpytorch.models.ApproximateGP):
         Creates a variational strategy suitable for a multi-task SVGP
 
         Returns:
-            gpytorch.variational.LMCVariationalStrategy: The variational
-            strategy to use for this model
+            gpytorch.variational.VariationalStrategy: The variational strategy
+            to use for this model
         """
 
         # We have to mark the CholeskyVariationalDistribution as batch so that
@@ -200,13 +201,15 @@ class MultiTaskSVGP(gpytorch.models.ApproximateGP):
             learn_inducing_locations=True,
         ).to(self.device)
 
-        lmc_var_strat = gpytorch.variational.LMCVariationalStrategy(
+        # var_strat = gpytorch.variational.IndependentMultitaskVariationalStrategy(
+        var_strat = gpytorch.variational.LMCVariationalStrategy(
             base_variational_strategy=base_variational_strategy,
             num_tasks=self.num_tasks,
             num_latents=self.num_latents,
             latent_dim=-1,
+            # task_dim=-1,
         ).to(self.device)
-        return lmc_var_strat
+        return var_strat
 
     def _create_covar(self):
         """
@@ -215,7 +218,6 @@ class MultiTaskSVGP(gpytorch.models.ApproximateGP):
 
         # The mean and covariance modules should be marked as batch
         # so we learn a different set of hyperparameters
-
         mean_prior = gpytorch.priors.NormalPrior(
             loc=0.77, scale=0.16)
         mean_constraint = gpytorch.constraints.constraints.Interval(
@@ -361,7 +363,6 @@ class MultiTaskSVGP(gpytorch.models.ApproximateGP):
         means, stddevs = [], []
         with torch.no_grad():
             for x_batch, y_batch in data_loader:
-
                 preds = self(x_batch)
                 means.extend(preds.mean.cpu().numpy().squeeze())
                 stddevs.extend(preds.stddev.cpu().numpy().squeeze())
