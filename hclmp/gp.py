@@ -151,18 +151,20 @@ class MultiTaskSVGP(gpytorch.models.ApproximateGP):
 
         # Argument parsing
         if self.inducing_points.size(0) != self.num_latents:
-            msg = dedent(f"""
+            msg = dedent(
+                f"""
                 The first dimension of the inducing points
-                         ({self.inducing_points.size(0)}) does not match the
-                         number of latent functions ({self.num_latents})
+                ({self.inducing_points.size(0)}) does not match the number of
+                latent functions ({self.num_latents})
                 """)
             raise ValueError(msg)
 
         if self.inducing_points.size(2) != self.num_features:
-            msg = dedent(f"""
+            msg = dedent(
+                f"""
                 The third dimension of the inducing points
-                         ({self.inducing_points.size(2)}) does not match the
-                         number of features ({self.num_features})
+                ({self.inducing_points.size(2)}) does not match the number of
+                features ({self.num_features})
                 """)
             raise ValueError(msg)
 
@@ -215,7 +217,7 @@ class MultiTaskSVGP(gpytorch.models.ApproximateGP):
         # so we learn a different set of hyperparameters
 
         mean_prior = gpytorch.priors.NormalPrior(
-            loc=0.5, scale=0.16)
+            loc=0.77, scale=0.16)
         mean_constraint = gpytorch.constraints.constraints.Interval(
             lower_bound=0, upper_bound=1)
         self.mean_module = gpytorch.means.ConstantMean(
@@ -361,7 +363,7 @@ class MultiTaskSVGP(gpytorch.models.ApproximateGP):
             for x_batch, y_batch in data_loader:
 
                 preds = self(x_batch)
-                means.extend(preds.mean.cpu().tolist())
-                stddevs.extend(preds.stddev.cpu().tolist())
+                means.extend(preds.mean.cpu().numpy().squeeze())
+                stddevs.extend(preds.stddev.cpu().numpy().squeeze())
 
         return np.array(means), np.array(stddevs)
