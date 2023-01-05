@@ -241,7 +241,8 @@ class Hclmp(torch.nn.Module):
             feat_out = feat_out.transpose(0, 1)  # [bs, label_dim, emb_size]
 
             if penultimate:
-                penult = feat_out.flatten(start_dim=1, end_dim=-1)
+                # penult = feat_out.flatten(start_dim=1, end_dim=-1)
+                penult = feat_out
                 return penult
 
             label_out = self.out_after_atten(label_out).squeeze()*0.5 + label_out0
