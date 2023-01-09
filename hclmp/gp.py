@@ -5,6 +5,7 @@ This submodule contains code for creating and handling Gaussian Processes.
 __author__ = 'Kevin Tran'
 __email__ = 'kevin.tran@tri.global'
 
+import os
 from textwrap import dedent
 
 import gpytorch
@@ -423,6 +424,410 @@ class ParallelSparseGPs:
         return means, stddevs
 
 
+class SVGP(gpytorch.models.ApproximateGP):
+    """
+    Sparse, variational Gaussian process.
+    """
+
+    def __init__(self,
+                 channel_slice: int,
+                 inducing_points: torch.tensor,
+                 device: torch.device = None,
+                 ):
+        """
+        Initialize this multi-objective SVGP
+
+        Args:
+            channel_slice (int): This GP is meant to handle slices of 3D inputs.
+            This argument governs which slice to take. The first dimension of
+            the input corresponds to observations; the second dimension
+            corresponds to channels; and the third dimension corresponds to
+            features. Yes, we know this is a bad practice. We've made a
+            conscious decision to take on this technical debt.
+
+            inducing_points (torch.tensor): The inducing points to use
+
+            device (torch.device): The device that you want this model to run
+            on. If `None`, then uses any available GPU.
+        """
+
+        self.channel_slice = channel_slice
+        self.inducing_points = inducing_points[:, self.channel_slice, :]
+        self.num_inducing_points = self.inducing_points.size(0)
+        self.device = device
+        var_strat = self._create_var_strat()
+
+        super().__init__(var_strat)
+
+        self._create_mean()
+        self._create_covar()
+        self._create_likelihood()
+
+        if self.device is None:
+            self.device = (torch.device('cuda') if torch.cuda.is_available()
+                           else torch.device('cpu'))
+
+    def _create_var_strat(self):
+        """
+        Creates a variational strategy suitable for a multi-task SVGP
+
+        Returns:
+            gpytorch.variational.VariationalStrategy: The variational strategy
+            to use for this model
+        """
+
+        var_dist = gpytorch.variational.CholeskyVariationalDistribution
+        variational_distribution = var_dist(
+            num_inducing_points=self.num_inducing_points,
+        ).to(self.device)
+
+        var_strat = gpytorch.variational.VariationalStrategy
+        variational_strategy = var_strat(
+            model=self,
+            inducing_points=self.inducing_points,
+            variational_distribution=variational_distribution,
+            learn_inducing_locations=True,
+        ).to(self.device)
+        return variational_strategy
+
+    def _create_mean(self):
+        """
+        Creates the mean module to use for this model
+        """
+
+        mean_prior = gpytorch.priors.NormalPrior(
+            loc=0.77, scale=0.16)
+
+        mean_constraint = gpytorch.constraints.constraints.Interval(
+            lower_bound=0, upper_bound=1)
+
+        self.mean_module = gpytorch.means.ConstantMean(
+            constant_prior=mean_prior,
+            constant_constraint=mean_constraint,
+        )
+
+    def _create_covar(self):
+        """
+        Creates the covariance module to use for this model
+        """
+
+        # prior_class = gpytorch.priors.torch_priors.MultivariateNormalPrior
+        # lengthscale_prior = prior_class(loc=0)
+
+        # lengthscale_constraint = gpytorch.constraints.constraints.Interval(
+        #     lower_bound=0, upper_bound=10)
+
+        kernel = gpytorch.kernels.MaternKernel(
+            nu=0.5,
+            # lengthscale_prior=lengthscale_prior,
+            # lengthscale_constraint=lengthscale_constraint,
+        ).to(self.device)
+
+        self.covar_module = gpytorch.kernels.ScaleKernel(
+            kernel,
+        ).to(self.device)
+
+    def _create_likelihood(self):
+        """
+        Creates the likelihood object to use for this model
+        """
+
+        likelihood = gpytorch.likelihoods.GaussianLikelihood().to(self.device)
+
+        # Lock the noise to some small value
+        # likelihood.noise = 1e-4
+        # likelihood.raw_noise.requires_grad_(False)
+
+        self.likelihood = likelihood
+
+    def forward(self, x):
+        # The forward function should be written as if we were dealing with each output
+        # dimension in batch
+        mean_x = self.mean_module(x).to(self.device)
+        covar_x = self.covar_module(x).to(self.device)
+        return gpytorch.distributions.MultivariateNormal(mean_x, covar_x)
+
+    def train_on_loader(
+        self,
+        data_loader: torch.utils.data.DataLoader,
+        n_epochs: int = 20,
+        lr: float = 0.1,
+        device: torch.device = None
+    ):
+        """
+        Train this SVGP
+
+        Args:
+            data_loader (torch.utils.data.DataLoader): The data loader
+            containing the training dataset to use
+
+            n_epochs (int): The number of epochs that should be used to train
+            this model
+
+            device (torch.device): The device (e.g., CPU or GPU) that should be
+            used during training. If `None` will default to cuda (if
+            available).
+        """
+
+        # Auto-detection of the device to use (if necessary)
+        if device is None:
+            device = self.device
+
+        optimizer = torch.optim.Adam(self.parameters(), lr=lr)
+
+        # If we're in a notebook, we'll use a dynamic plot of the loss.  But if
+        # we're in a normal python thread, then we'll just use tqdm and print
+        # statements.
+        notebook = hclmp.core.is_notebook()
+        if notebook:
+            fig = plt.figure()
+            ax = fig.subplots(1, 1)
+            from IPython.display import display, clear_output
+
+        # Initialize training
+        self.train()
+        mll = gpytorch.mlls.VariationalELBO(likelihood=self.likelihood,
+                                            model=self,
+                                            num_data=len(data_loader.dataset))
+        losses = []
+        minibatches = []
+
+        epoch_iter = tqdm(range(n_epochs), total=n_epochs, desc='Epochs')
+        for epoch in epoch_iter:
+
+            # Divide training of each epoch into batches
+            minibatch_iter = tqdm(data_loader, desc='Minibatch')
+            for x_batch, y_batch in minibatch_iter:
+                x_batch = x_batch.to(device)[:, self.channel_slice, :]
+                y_batch = y_batch.to(device)[:, self.channel_slice]
+
+                # Train on this one batch
+                optimizer.zero_grad()
+                output = self(x_batch)
+                loss = -mll(output, y_batch)
+                epoch_iter.set_postfix(loss=loss.item())
+                loss.backward()
+                optimizer.step()
+
+                # Display the loss via dynamically updating plot
+                losses.append(float(loss))
+                minibatches.append(len(losses))
+                if notebook:
+                    ax.clear()
+                    ax.set_xlim([0, n_epochs * len(data_loader)])
+                    min_loss = min(0, min(losses))
+                    max_loss = max(losses)
+                    ax.set_ylim([min_loss, max_loss])
+                    ax.set_xlabel('Minibatch #')
+                    ax.set_ylabel('Loss')
+                    sns.lineplot(x=minibatches, y=losses, ax=ax)
+                    display(fig)
+                    clear_output(wait=True)
+
+    def predict(self,
+                data_loader: torch.utils.data.DataLoader,
+                ) -> (np.ndarray, np.ndarray):
+        """
+        Make predictions on the trained model
+
+        Args:
+            data_loader (torch.utils.data.DataLoader): The data to make
+            predictions on
+
+        Returns:
+            (np.ndarray, np.ndarray): The mean and standard error predictions,
+            respectively
+        """
+
+        self.eval()
+        self.likelihood.eval()
+
+        means, stddevs = [], []
+        with torch.no_grad():
+            for x_batch, y_batch in data_loader:
+                x_batch = x_batch.to(self.device)[:, self.channel_slice, :]
+                y_batch = y_batch.to(self.device)
+                preds = self(x_batch)
+                means.extend(preds.mean.cpu().numpy().squeeze())
+                stddevs.extend(preds.stddev.cpu().numpy().squeeze())
+
+        return np.array(means), np.array(stddevs)
+
+    def save_state(self, file_name: str):
+        """
+        Saves the state of this model
+
+        Args:
+            file_name (str): The name of the file to save the state to
+        """
+
+        state_dict = self.state_dict()
+        torch.save(obj=state_dict, f=file_name)
+
+    def load_state(self, file_name: str):
+        """
+        Sets the state of this model using a saved state dictionary
+
+        Args:
+            file_name (str): The name of the file to load the state from
+        """
+
+        state_dict = torch.load(f=file_name)
+        self.load_state_dict(state_dict)
+
+
+class ParallelSVGP:
+    """
+    This class is meant to manage sparse variational GPs in parallel and
+    independent of each other. There should be no information sharing between
+    them. Thus, this class is created only for ease-of-use.
+    """
+
+    CHECKPOINT_FILE_EXT = '.pth.tar'
+    CHECKPOINT_NAME = 'gp_%s_cp'
+
+    def __init__(self,
+                 num_models: int,
+                 inducing_points: torch.tensor,
+                 device: torch.device = None,
+                 ):
+        """
+
+        Args:
+            num_models (int): The number of models you want to be using in
+            parallel
+
+            inducing_points (torch.tensor): The number of inducing points to use
+
+            device (torch.device): The device that you want this model to run
+            on. If `None`, then uses any available GPU.
+        """
+
+        self.device = device
+        if self.device is None:
+            self.device = (torch.device('cuda') if torch.cuda.is_available()
+                           else torch.device('cpu'))
+
+        self.gps = []
+        for idx in range(num_models):
+            gp = hclmp.gp.SVGP(
+                channel_slice=idx,
+                inducing_points=inducing_points,
+                device=self.device,
+            )
+            self.gps.append(gp)
+
+    def train_gps(self,
+                  data_loader: torch.utils.data.DataLoader,
+                  n_epochs: int = 20,
+                  lr: float = 0.1,
+                  device: torch.device = None,
+                  ):
+        """
+        Train all of the GPs
+
+        Args:
+            data_loader (torch.utils.data.DataLoader): The data loader
+            containing the training dataset to use
+
+            n_epochs (int): The number of epochs that should be used to train
+            these models
+
+            lr (float): The learning rate to use during training
+
+            device (torch.device): The device (e.g., CPU or GPU) that should be
+            used during training. If `None` will default to cuda (if
+            available).
+        """
+
+        for gp_idx, gp in enumerate(self.gps):
+            gp.train_on_loader(
+                data_loader=data_loader,
+                n_epochs=n_epochs,
+                lr=lr,
+                device=device,
+             )
+
+    def predict(self,
+                data_loader: torch.utils.data.DataLoader,
+                ) -> (np.ndarray, np.ndarray):
+        """
+        Make predictions on the models
+
+        Args:
+            data_loader (torch.utils.data.DataLoader): The data to make
+            predictions on
+
+        Returns:
+            (np.ndarray, np.ndarray): The mean and standard error predictions,
+            respectively
+        """
+
+        means, stddevs = [], []
+        for gp_idx, gp in enumerate(self.gps):
+            means_slice, stddevs_slice = gp.predict(data_loader=data_loader)
+            means.append(means_slice)
+            stddevs.append(stddevs_slice)
+
+        means = np.vstack(means).transpose()
+        stddevs = np.vstack(stddevs).transpose()
+        return means, stddevs
+
+    def save_state_dicts(self, folder_name: str):
+        """
+        Standardized way of saving the state dictionaries of the various
+        parallel GPs
+
+        Args:
+            folder_name (str): The folder to save the checkpoint files in
+        """
+
+        # Make the folder of checkpoints
+        os.makedirs(folder_name, exist_ok=True)
+
+        # Delete old checkpoints to prevent checkpoint file mangling
+        for file_name in os.listdir(folder_name):
+            if file_name.endswith(self.CHECKPOINT_FILE_EXT):
+                file_path = os.path.join(folder_name, file_name)
+                os.remove(file_path)
+
+        # Save the new checkpoints
+        for idx, gp in enumerate(self.gps):
+            checkpoint_path = self._get_checkpoint_path(folder_name, idx)
+            gp.save_state(checkpoint_path)
+
+    def load_state_dicts(self, folder_name: str):
+        """
+        Standardized way of loading the state dictionaries we saved via the
+        `save_state_dicts` method
+
+        Args:
+            folder_name (str): The folder to load the checkpoint files from
+        """
+
+        for idx, gp in enumerate(self.gps):
+            checkpoint_path = self._get_checkpoint_path(folder_name, idx)
+            gp.load_state(checkpoint_path)
+
+    def _get_checkpoint_path(self, folder_name: str, idx: int):
+        """
+        Gets the full path to a checkpoint file
+
+        Args:
+            folder_name (str): The folder to load the checkpoint files from
+
+            idx (int): The slice number/index of the SVGP you want to get the
+            checkpoint for
+
+        Returns:
+            str: The path to the checkpoint file
+        """
+
+        cp_name = (self.CHECKPOINT_NAME % idx) + self.CHECKPOINT_FILE_EXT
+        cp_path = os.path.join(folder_name, cp_name)
+        return cp_path
+
+
 class MultiTaskSVGP(gpytorch.models.ApproximateGP):
     """
     Multi-task/objective, sparse, variational Gaussian process. This code is
@@ -674,12 +1079,12 @@ class MultiTaskSVGP(gpytorch.models.ApproximateGP):
         Make predictions on the trained model
 
         Args:
+            data_loader (torch.utils.data.DataLoader): The data to make
+            predictions on
+
             likelihood (likelihoods.Likelihood): The likelihood to use when
             making predictions. This should probably be the same likelihood
             used during training, but you do you.
-
-            data_loader (torch.utils.data.DataLoader): The data to make
-            predictions on
 
         Returns:
             (np.ndarray, np.ndarray): The mean and standard error predictions,
