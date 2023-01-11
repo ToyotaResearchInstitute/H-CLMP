@@ -31,6 +31,7 @@ class PenultDataset(torch.utils.data.Dataset):
     def __init__(self,
                  model: hclmp.model.Hclmp,
                  comp_dataset: hclmp.graph_encoder.CompositionData,
+                 flatten: bool = False,
                  device: torch.device = None,
                  ):
         """
@@ -42,12 +43,16 @@ class PenultDataset(torch.utils.data.Dataset):
             comp_dataset (hclmp.graph_encoder.CompositionData): The dataset
             used to train the given model
 
+            flatten (bool): Whether to flatten the 2-D array of penultimate
+            values into a 1-D vector
+
             device (torch.device): The device that you want this model to run
             on. If `None`, then uses any available GP.
         """
 
         self.model = model
         self.comp_dataset = comp_dataset
+        self.flatten = flatten
 
         if device is None:
             device = (torch.device('cuda') if torch.cuda.is_available() else
@@ -93,6 +98,9 @@ class PenultDataset(torch.utils.data.Dataset):
                 pen_values.append(penult.cpu().numpy())
         pen_values_stacked = np.concatenate(pen_values, axis=0)
         self.pen_values = torch.tensor(pen_values_stacked).to(self.device)
+
+        if self.flatten:
+            self.pen_values = self.pen_values.flatten(start_dim=-2)
 
 
 class SparseGP(gpytorch.models.ExactGP):
@@ -876,6 +884,7 @@ class MultiTaskSVGP(gpytorch.models.ApproximateGP):
         super().__init__(var_strat)
 
         self._create_covar()
+        self._create_likelihood()
 
     def _parse_init_args(self):
         """
@@ -980,6 +989,23 @@ class MultiTaskSVGP(gpytorch.models.ApproximateGP):
             batch_shape=torch.Size([self.num_latents]),
         ).to(self.device)
 
+    def _create_likelihood(self):
+        """
+        Create a likelihood object for this model
+        """
+
+        likelihood = gpytorch.likelihoods.MultitaskGaussianLikelihood(
+                num_tasks=self.num_tasks,
+        ).to(self.device)
+
+        # Set the noise to be constant (i.e., don't train on the noise).
+        # It should be some small value, but don't make it too small or
+        # numerical performance will suffer.
+        # likelihood.noise = 1e-4
+        # likelihood.raw_noise.requires_grad_(False)
+
+        self.likelihood = likelihood
+
     def forward(self, x):
         # The forward function should be written as if we were dealing with each output
         # dimension in batch
@@ -990,8 +1016,6 @@ class MultiTaskSVGP(gpytorch.models.ApproximateGP):
     def train_on_loader(
         self,
         data_loader: torch.utils.data.DataLoader,
-        likelihood: gpytorch.likelihoods.MultitaskGaussianLikelihood,
-        optimizer: torch.optim.Optimizer,
         n_epochs: int = 20,
         device: torch.device = None
     ):
@@ -1001,14 +1025,6 @@ class MultiTaskSVGP(gpytorch.models.ApproximateGP):
         Args:
             data_loader (torch.utils.data.DataLoader): The data loader
             containing the training dataset to use
-
-            likelihood (gpytorch.likelihoods.MultitaskGaussianLikelihood): The
-            likelihood object that should be used for this GP. The `num_tasks`
-            argument used to instantiate this likelihood should probably be
-            equal to the number of tasks that this GP is meant to perform.
-
-            optimizer (torch.optim.Optimizer): The optimizer to use to find the
-            model parameters
 
             n_epochs (int): The number of epochs that should be used to train
             this model
@@ -1033,9 +1049,10 @@ class MultiTaskSVGP(gpytorch.models.ApproximateGP):
 
         # Initialize training
         self.train()
-        mll = gpytorch.mlls.VariationalELBO(likelihood=likelihood,
+        mll = gpytorch.mlls.VariationalELBO(likelihood=self.likelihood,
                                             model=self,
                                             num_data=len(data_loader.dataset))
+        optimizer = torch.optim.Adam(self.parameters())
         losses = []
         minibatches = []
 
@@ -1073,7 +1090,6 @@ class MultiTaskSVGP(gpytorch.models.ApproximateGP):
 
     def predict(self,
                 data_loader: torch.utils.data.DataLoader,
-                likelihood: gpytorch.likelihoods.Likelihood,
                 ) -> (np.ndarray, np.ndarray):
         """
         Make predictions on the trained model
@@ -1082,17 +1098,13 @@ class MultiTaskSVGP(gpytorch.models.ApproximateGP):
             data_loader (torch.utils.data.DataLoader): The data to make
             predictions on
 
-            likelihood (likelihoods.Likelihood): The likelihood to use when
-            making predictions. This should probably be the same likelihood
-            used during training, but you do you.
-
         Returns:
             (np.ndarray, np.ndarray): The mean and standard error predictions,
             respectively
         """
 
         self.eval()
-        likelihood.eval()
+        self.likelihood.eval()
 
         means, stddevs = [], []
         with torch.no_grad():
