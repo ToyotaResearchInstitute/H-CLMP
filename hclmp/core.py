@@ -10,7 +10,6 @@ import textwrap
 
 import numpy as np
 import matplotlib.pyplot as plt
-import seaborn as sns
 import torch
 import torch.optim
 from torch.utils.data import Dataset, DataLoader
@@ -199,6 +198,7 @@ def train_new(model: Hclmp,
 
             # Display the loss via dynamically updating plot
             else:
+                import seaborn as sns
                 ax.clear()
                 ax.set_xlim([0, num_epochs * len(data_loader)])
                 min_loss = float(min([0] + [min(loss) for loss in losses.values()]))
