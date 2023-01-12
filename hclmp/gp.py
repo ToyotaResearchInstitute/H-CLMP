@@ -11,7 +11,6 @@ from textwrap import dedent
 import gpytorch
 import matplotlib.pyplot as plt
 import numpy as np
-import seaborn as sns
 import torch
 import torch.utils.data
 from tqdm.auto import tqdm
@@ -372,6 +371,7 @@ class ParallelSparseGPs:
                     epochs.append(epoch)
 
                     if notebook:
+                        import seaborn as sns
                         ax.clear()
                         ax.set_xlim([0, n_epochs])
                         min_loss = min(0, min(losses))
@@ -621,6 +621,7 @@ class SVGP(gpytorch.models.ApproximateGP):
                 losses.append(float(loss))
                 minibatches.append(len(losses))
                 if notebook:
+                    import seaborn as sns
                     ax.clear()
                     ax.set_xlim([0, n_epochs * len(data_loader)])
                     min_loss = min(0, min(losses))
