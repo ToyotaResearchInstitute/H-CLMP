@@ -1018,6 +1018,7 @@ class MultiTaskSVGP(gpytorch.models.ApproximateGP):
         self,
         data_loader: torch.utils.data.DataLoader,
         n_epochs: int = 20,
+        lr: float = 0.1,
         device: torch.device = None
     ):
         """
@@ -1029,6 +1030,8 @@ class MultiTaskSVGP(gpytorch.models.ApproximateGP):
 
             n_epochs (int): The number of epochs that should be used to train
             this model
+
+            lr (float): The learning rate to use during training
 
             device (torch.device): The device (e.g., CPU or GPU) that should be
             used during training. If `None` will default to cuda (if
@@ -1053,7 +1056,9 @@ class MultiTaskSVGP(gpytorch.models.ApproximateGP):
         mll = gpytorch.mlls.VariationalELBO(likelihood=self.likelihood,
                                             model=self,
                                             num_data=len(data_loader.dataset))
-        optimizer = torch.optim.Adam(self.parameters())
+        parameters = self.parameters()
+        parameters['lr'] = lr
+        optimizer = torch.optim.Adam(parameters)
         losses = []
         minibatches = []
 
