@@ -1056,9 +1056,7 @@ class MultiTaskSVGP(gpytorch.models.ApproximateGP):
         mll = gpytorch.mlls.VariationalELBO(likelihood=self.likelihood,
                                             model=self,
                                             num_data=len(data_loader.dataset))
-        parameters = self.parameters()
-        parameters['lr'] = lr
-        optimizer = torch.optim.Adam(parameters)
+        optimizer = torch.optim.Adam(params=self.parameters(), lr=lr)
         losses = []
         minibatches = []
 
