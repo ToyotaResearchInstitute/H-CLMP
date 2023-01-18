@@ -1078,6 +1078,7 @@ class MultiTaskSVGP(gpytorch.models.ApproximateGP):
                 losses.append(float(loss))
                 minibatches.append(len(losses))
                 if notebook:
+                    import seaborn as sns
                     ax.clear()
                     ax.set_xlim([0, n_epochs * len(data_loader)])
                     min_loss = min(0, min(losses))
